@@ -1,276 +1,238 @@
 "use client";
 
-import React, { useEffect, useState, use, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { useParams } from "next/navigation";
+import { supabase } from "../../lib/supabaseClient";
 import { shuffleArray } from "../../lib/shuffle";
 
+type GameRow = {
+  code: string;
+  songs: string[];
+  current_index: number;
+  revealed: boolean;
+};
+
 type Cell = {
-  label: string;
+  title: string | null;
+  marked: boolean;
   isFree?: boolean;
 };
 
-type SavedCard = {
-  cells: Cell[];
-  marks: boolean[];
-};
+type CardGrid = Cell[][]; // 5x5
 
-type TvState = {
-  currentIndex: number;
-  totalSongs: number;
-  revealed: boolean;
-  songs: string[];
-};
-
-const GRID_SIZE = 5;
-const TOTAL_CELLS = GRID_SIZE * GRID_SIZE;
-const CENTER_INDEX = Math.floor(TOTAL_CELLS / 2);
-
-// Remove artist (only return title)
-function getTitleOnly(label: string): string {
+function songTitleOnly(label: string): string {
   const parts = label.split(" - ");
-  if (parts.length > 1) return parts.slice(1).join(" - ");
+  if (parts.length >= 2) return parts.slice(1).join(" - ").trim();
   return label;
 }
 
-// Check for bingo
-function checkBingo(marks: boolean[]): boolean {
-  // rows
-  for (let r = 0; r < GRID_SIZE; r++) {
-    let ok = true;
-    for (let c = 0; c < GRID_SIZE; c++) {
-      if (!marks[r * GRID_SIZE + c]) {
-        ok = false;
-        break;
+function createNewCard(allSongs: string[]): CardGrid {
+  const cleaned = allSongs.map(songTitleOnly);
+  const unique = Array.from(new Set(cleaned));
+  const shuffled = shuffleArray(unique);
+  const needed = 25 - 1; // 24 cells + 1 free
+  const use = shuffled.slice(0, Math.min(needed, shuffled.length));
+
+  // Fill row-major 5x5, with center as FREE and null title
+  const grid: CardGrid = [];
+  let idx = 0;
+  for (let r = 0; r < 5; r++) {
+    const row: Cell[] = [];
+    for (let c = 0; c < 5; c++) {
+      if (r === 2 && c === 2) {
+        row.push({
+          title: null,
+          marked: true, // free space already marked
+          isFree: true,
+        });
+      } else {
+        const title = idx < use.length ? use[idx] : null;
+        row.push({
+          title,
+          marked: false,
+        });
+        idx++;
       }
     }
-    if (ok) return true;
+    grid.push(row);
   }
-
-  // columns
-  for (let c = 0; c < GRID_SIZE; c++) {
-    let ok = true;
-    for (let r = 0; r < GRID_SIZE; r++) {
-      if (!marks[r * GRID_SIZE + c]) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) return true;
-  }
-
-  // main diagonal
-  {
-    let ok = true;
-    for (let i = 0; i < GRID_SIZE; i++) {
-      if (!marks[i * GRID_SIZE + i]) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) return true;
-  }
-
-  // anti diagonal
-  {
-    let ok = true;
-    for (let i = 0; i < GRID_SIZE; i++) {
-      const idx = i * GRID_SIZE + (GRID_SIZE - 1 - i);
-      if (!marks[idx]) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) return true;
-  }
-
-  return false;
+  return grid;
 }
 
-// Convert TV state → which songs have been played
-function getPlayedListFromTv(state: TvState | null): string[] {
-  if (!state) return [];
-  if (!state.songs || state.songs.length === 0) return [];
+export default function GamePage() {
+  const params = useParams<{ code: string }>();
+  const code = (params?.code || "").toString().toUpperCase();
 
-  let endIndex = state.revealed
-    ? Math.min(state.currentIndex + 1, state.songs.length)
-    : Math.min(state.currentIndex, state.songs.length);
-
-  if (endIndex <= 0) return [];
-  return state.songs.slice(0, endIndex);
-}
-
-export default function GamePage({
-  params,
-}: {
-  params: Promise<{ code: string }>;
-}) {
-  const { code } = use(params);
-
-  const [cells, setCells] = useState<Cell[]>([]);
-  const [marks, setMarks] = useState<boolean[]>([]);
-  const [hasBingo, setHasBingo] = useState(false);
+  const [game, setGame] = useState<GameRow | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [tvState, setTvState] = useState<TvState | null>(null);
-  const [warn, setWarn] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [card, setCard] = useState<CardGrid | null>(null);
 
-  const cardKey = `bingo-card-${code}`;
-  const poolKey = `bingo-${code}`;
-  const tvKey = `bingo-tv-${code}`;
-
-  // Build or load card
+  // Fetch game and poll
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (!code) return;
 
-    try {
-      const rawCard = window.localStorage.getItem(cardKey);
-      if (rawCard) {
-        const saved = JSON.parse(rawCard) as SavedCard;
-        if (
-          saved.cells?.length === TOTAL_CELLS &&
-          saved.marks?.length === TOTAL_CELLS
-        ) {
-          setCells(saved.cells);
-          setMarks(saved.marks);
-          setHasBingo(checkBingo(saved.marks));
-          setLoading(false);
-          return;
-        }
+    let cancelled = false;
+
+    const fetchGame = async () => {
+      const { data, error } = await supabase
+        .from("games")
+        .select("code,songs,current_index,revealed")
+        .eq("code", code)
+        .maybeSingle();
+
+      if (cancelled) return;
+
+      if (error || !data) {
+        setErrorMsg("Game not found. Check the code.");
+        setGame(null);
+      } else {
+        setErrorMsg(null);
+        setGame(data as GameRow);
       }
-
-      const rawPool = window.localStorage.getItem(poolKey);
-      if (!rawPool) {
-        setError("No song list found for this game. Host must start the game.");
-        setLoading(false);
-        return;
-      }
-
-      const pool = JSON.parse(rawPool) as string[];
-      const newCard = generateCardFromPool(pool);
-      setCells(newCard.cells);
-      setMarks(newCard.marks);
-      setHasBingo(checkBingo(newCard.marks));
-
-      window.localStorage.setItem(cardKey, JSON.stringify(newCard));
       setLoading(false);
-    } catch {
-      setError("Error building card.");
-      setLoading(false);
-    }
-  }, [cardKey, poolKey]);
-
-  // Generate card
-  const generateCardFromPool = (pool: string[]): SavedCard => {
-    let poolCopy = [...pool];
-
-    if (poolCopy.length < TOTAL_CELLS - 1) {
-      const times = Math.ceil((TOTAL_CELLS - 1) / poolCopy.length);
-      poolCopy = Array.from({ length: times }, () => poolCopy).flat();
-    }
-
-    const shuffled = shuffleArray(poolCopy);
-    const picks = shuffled.slice(0, TOTAL_CELLS - 1);
-
-    const cells: Cell[] = new Array(TOTAL_CELLS);
-    let idx = 0;
-
-    for (let i = 0; i < TOTAL_CELLS; i++) {
-      if (i === CENTER_INDEX) continue;
-      cells[i] = { label: picks[idx++] };
-    }
-
-    cells[CENTER_INDEX] = { label: "FREE", isFree: true };
-
-    const marks = Array(TOTAL_CELLS).fill(false);
-    marks[CENTER_INDEX] = true;
-
-    return { cells, marks };
-  };
-
-  // Read TV state
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const tick = () => {
-      const raw = window.localStorage.getItem(tvKey);
-      if (!raw) return;
-      try {
-        setTvState(JSON.parse(raw));
-      } catch {}
     };
 
-    tick();
-    const interval = setInterval(tick, 1000);
-    window.addEventListener("storage", (e) => {
-      if (e.key === tvKey) tick();
-    });
+    fetchGame();
+    const intervalId = setInterval(fetchGame, 2000);
 
-    return () => clearInterval(interval);
-  }, [tvKey]);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [code]);
 
-  const playedList = useMemo(
-    () => getPlayedListFromTv(tvState),
-    [tvState]
-  );
+  // Build or load card once we know the song list
+  useEffect(() => {
+    if (!game) return;
+    if (!game.songs || game.songs.length === 0) return;
+    if (typeof window === "undefined") return;
 
-  // Prevent marking songs that haven't been played
-  const handleToggle = (index: number) => {
-    const cell = cells[index];
-    if (!cell || cell.isFree) return;
+    const storageKey = `bingo-card-${code}`;
+    const raw = window.localStorage.getItem(storageKey);
 
-    const allowed = playedList.includes(cell.label);
-    if (!allowed) {
-      setWarn("You can only mark songs that have already been played.");
-      setTimeout(() => setWarn(null), 1200);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as CardGrid;
+        setCard(parsed);
+        return;
+      } catch {
+        // fall through to new card
+      }
+    }
+
+    const grid = createNewCard(game.songs);
+    setCard(grid);
+    window.localStorage.setItem(storageKey, JSON.stringify(grid));
+  }, [game, code]);
+
+  // Save card whenever it changes
+  useEffect(() => {
+    if (!card || typeof window === "undefined" || !code) return;
+    const storageKey = `bingo-card-${code}`;
+    window.localStorage.setItem(storageKey, JSON.stringify(card));
+  }, [card, code]);
+
+  const playableTitles = useMemo(() => {
+    if (!game) return new Set<string>();
+    const { songs, current_index, revealed } = game;
+    const visibleCount = revealed ? current_index + 1 : current_index;
+    const slice = songs.slice(0, Math.max(0, visibleCount));
+    return new Set(slice.map(songTitleOnly));
+  }, [game]);
+
+  const handleCellClick = (r: number, c: number) => {
+    if (!card) return;
+    const cell = card[r][c];
+
+    if (cell.isFree) {
+      // allow toggling free if you want, or keep it always marked
+      // here we keep it always marked
       return;
     }
 
-    const newMarks = [...marks];
-    newMarks[index] = !newMarks[index];
-    setMarks(newMarks);
-    setHasBingo(checkBingo(newMarks));
+    if (!cell.title) {
+      return;
+    }
 
-    window.localStorage.setItem(
-      cardKey,
-      JSON.stringify({ cells, marks: newMarks })
+    // Only allow marking if this title is playable (song has been played)
+    if (!playableTitles.has(cell.title)) {
+      return;
+    }
+
+    const updated: CardGrid = card.map((row, ri) =>
+      row.map((col, ci) => {
+        if (ri === r && ci === c) {
+          return { ...col, marked: !col.marked };
+        }
+        return col;
+      })
     );
+    setCard(updated);
   };
 
+  if (!code) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-black text-white font-['Press_Start_2P']">
+        <div className="text-center">
+          <h1 className="text-2xl mb-4">JOIN GAME</h1>
+          <p className="text-sm opacity-80">No game code in URL.</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (loading || !game || !card) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-black text-white font-['Press_Start_2P']">
+        <div className="text-center">
+          <h1 className="text-2xl mb-4">JOINED GAME: {code}</h1>
+          {errorMsg ? (
+            <p className="text-sm opacity-80">{errorMsg}</p>
+          ) : (
+            <p className="text-sm opacity-80">Loading card...</p>
+          )}
+        </div>
+      </main>
+    );
+  }
+
   return (
-    <main className="min-h-screen text-white p-4 flex justify-center font-['Press_Start_2P'] overflow-auto">
-      <div className="w-full max-w-3xl flex flex-col items-center gap-4">
-        <h1 className="text-2xl md:text-3xl">MUSIC BINGO</h1>
-        <p className="text-xs opacity-80">Game Code: {code}</p>
+    <main className="min-h-screen bg-black text-white font-['Press_Start_2P'] flex flex-col items-center justify-center p-4">
+      <div className="mb-4 text-center">
+        <div className="text-xs opacity-60 mb-1">GAME CODE</div>
+        <div className="text-2xl tracking-[0.4em]">{code}</div>
+        <div className="text-[10px] opacity-60 mt-1">
+          Tap a song only after it has been played.
+        </div>
+      </div>
 
-        {warn && (
-          <div className="px-3 py-2 bg-amber-400 text-black rounded text-xs">
-            {warn}
-          </div>
-        )}
-
-        {/* BINGO grid */}
-        <div className="grid grid-cols-5 gap-1 w-full max-w-xl mt-2">
-          {cells.map((cell, i) => {
-            const marked = marks[i];
+      <div className="grid grid-cols-5 gap-1 w-full max-w-md aspect-square">
+        {card.map((row, r) =>
+          row.map((cell, c) => {
             const isCenter = cell.isFree;
+            const playable =
+              isCenter || (cell.title ? playableTitles.has(cell.title) : false);
+
+            const baseClasses =
+              "flex items-center justify-center text-[9px] sm:text-xs md:text-sm text-center p-1 sm:p-2 border border-white/30";
+            const markedClasses = cell.marked
+              ? "bg-lime-400 text-black shadow-[0_0_12px_#a3e635]"
+              : playable
+              ? "bg-black/70"
+              : "bg-black/40 opacity-50";
 
             return (
               <button
-                key={i}
-                onClick={() => handleToggle(i)}
-                className={`aspect-square text-[9px] md:text-xs p-1 border border-white/30
-                  ${
-                    isCenter
-                      ? "bg-fuchsia-500 text-black"
-                      : marked
-                      ? "bg-lime-400 text-black"
-                      : "bg-black/50"
-                  }`}
+                key={`${r}-${c}`}
+                onClick={() => handleCellClick(r, c)}
+                className={`${baseClasses} ${markedClasses}`}
               >
-                {getTitleOnly(cell.label)}
+                {isCenter ? "FREE" : cell.title ?? ""}
               </button>
             );
-          })}
-        </div>
+          })
+        )}
       </div>
     </main>
   );

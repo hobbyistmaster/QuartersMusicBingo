@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { parseBlob } from "music-metadata-browser";
 import { shuffleArray } from "../lib/shuffle";
 import { themes } from "../data/themes";
+import { supabase } from "../lib/supabaseClient";
 
 // Hard-coded PIN for host screen – change this to whatever you want
 const HOST_PIN = "1999";
@@ -54,7 +55,7 @@ async function getLabelForFile(file: File): Promise<string> {
 export default function HostPage() {
   const [authorized, setAuthorized] = useState(false);
   const [pinInput, setPinInput] = useState("");
-  const [pinError, setPinError] = useState("");
+  const [pinError, setPinError]] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -110,7 +111,6 @@ export default function HostPage() {
     );
   }
 
-  // Once authorized, render the actual host controls
   return <HostMain />;
 }
 
@@ -179,8 +179,8 @@ function HostMain() {
     }
   };
 
-  // Start a new game: shuffle and write state to localStorage for TV / cards
-  const startGame = () => {
+  // Start a new game: shuffle and save to Supabase
+  const startGame = async () => {
     if (baseTitles.length === 0) {
       alert("No songs available. Load MP3 files or use a theme with saved titles.");
       return;
@@ -210,39 +210,30 @@ function HostMain() {
       audioRef.current.currentTime = 0;
     }
 
-    if (typeof window !== "undefined") {
-      // for cards
-      window.localStorage.setItem(
-        `bingo-${newCode}`,
-        JSON.stringify(shuffledLabels)
-      );
-
-      // for TV display
-      const tvState = {
-        currentIndex: 0,
-        totalSongs: shuffledLabels.length,
-        revealed: false,
-        songs: shuffledLabels,
-      };
-      window.localStorage.setItem(
-        `bingo-tv-${newCode}`,
-        JSON.stringify(tvState)
-      );
-    }
+    // Save to Supabase so TV + phones can see it
+    await supabase.from("games").upsert({
+      code: newCode,
+      songs: shuffledLabels,
+      current_index: 0,
+      revealed: false,
+    });
   };
 
-  // Whenever currentStep / revealed changes, update TV state in localStorage
+  // Whenever currentStep / revealed changes, update Supabase
   useEffect(() => {
-    if (!code || playLabels.length === 0 || typeof window === "undefined") return;
+    if (!code || playLabels.length === 0) return;
 
-    const tvState = {
-      currentIndex: currentStep,
-      totalSongs: playLabels.length,
-      revealed,
-      songs: playLabels,
-    };
-    window.localStorage.setItem(`bingo-tv-${code}`, JSON.stringify(tvState));
-  }, [code, currentStep, revealed, playLabels]);
+    supabase
+      .from("games")
+      .update({
+        current_index: currentStep,
+        revealed,
+      })
+      .eq("code", code)
+      .then(() => {
+        // ignore errors for now
+      });
+  }, [code, currentStep, revealed, playLabels.length]);
 
   // Current song & audio
   const currentFile =

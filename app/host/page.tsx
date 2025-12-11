@@ -7,7 +7,7 @@ import { themes } from "../data/themes";
 import { supabase } from "../lib/supabaseClient";
 
 // Hard-coded PIN for host screen – change this to whatever you want
-const HOST_PIN = "1999";
+const HOST_PIN = "1234";
 const HOST_AUTH_KEY = "music-bingo-host-auth-v2";
 
 /* Generate 4-letter game code */
@@ -55,7 +55,7 @@ async function getLabelForFile(file: File): Promise<string> {
 export default function HostPage() {
   const [authorized, setAuthorized] = useState(false);
   const [pinInput, setPinInput] = useState("");
-  const [pinError, setPinError]] = useState("");
+  const [pinError, setPinError] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -210,39 +210,44 @@ function HostMain() {
       audioRef.current.currentTime = 0;
     }
 
-  // Save to Supabase so TV + phones can see it
-  const { error } = await supabase.from("games").upsert({
-    code: newCode,
-    songs: shuffledLabels,
-    current_index: 0,
-    revealed: false,
-  });
+    // Save to Supabase so TV + phones can see it
+    const { error } = await supabase.from("games").upsert({
+      code: newCode,
+      songs: shuffledLabels,
+      current_index: 0,
+      revealed: false,
+    });
 
-  if (error) {
-    console.error("Supabase upsert error:", error);
-    alert("Failed to save game to Supabase: " + error.message);
-  } else {
-    console.log("Game saved to Supabase with code:", newCode);
-  }
-};
-
-  
+    if (error) {
+      console.error("Supabase upsert error:", error);
+      alert("Failed to save game to Supabase: " + error.message);
+    } else {
+      console.log("Game saved to Supabase with code:", newCode);
+    }
+  };
 
   // Whenever currentStep / revealed changes, update Supabase
   useEffect(() => {
     if (!code || playLabels.length === 0) return;
 
-    supabase
-      .from("games")
-      .update({
-        current_index: currentStep,
-        revealed,
-      })
-      .eq("code", code)
-      .then(() => {
-        // ignore errors for now
-      });
+    const updateGame = async () => {
+      const { error } = await supabase
+        .from("games")
+        .update({
+          current_index: currentStep,
+          revealed,
+        })
+        .eq("code", code);
+
+      if (error) {
+        console.error("Supabase update error:", error);
+      }
+    };
+
+    updateGame();
   }, [code, currentStep, revealed, playLabels.length]);
+
+
 
   // Current song & audio
   const currentFile =
@@ -380,7 +385,7 @@ function HostMain() {
         </div>
 
         {/* Now Playing */}
-        <div className="w-full max-w-xl bg-black/60 border border-white/20 rounded-xl p-4">
+        <div className="w-full max-w-xl bg黑/60 border border-white/20 rounded-xl p-4">
           <h2 className="text-xl mb-3 text-center">NOW PLAYING</h2>
 
           <p className="text-sm opacity-70 mb-1">Song:</p>

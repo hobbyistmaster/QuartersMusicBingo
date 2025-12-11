@@ -210,14 +210,23 @@ function HostMain() {
       audioRef.current.currentTime = 0;
     }
 
-    // Save to Supabase so TV + phones can see it
-    await supabase.from("games").upsert({
-      code: newCode,
-      songs: shuffledLabels,
-      current_index: 0,
-      revealed: false,
-    });
-  };
+  // Save to Supabase so TV + phones can see it
+  const { error } = await supabase.from("games").upsert({
+    code: newCode,
+    songs: shuffledLabels,
+    current_index: 0,
+    revealed: false,
+  });
+
+  if (error) {
+    console.error("Supabase upsert error:", error);
+    alert("Failed to save game to Supabase: " + error.message);
+  } else {
+    console.log("Game saved to Supabase with code:", newCode);
+  }
+};
+
+  
 
   // Whenever currentStep / revealed changes, update Supabase
   useEffect(() => {

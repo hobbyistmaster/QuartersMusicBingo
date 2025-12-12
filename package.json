@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.87.1",
     "jsmediatags": "^3.9.7",
     "music-metadata-browser": "^2.5.11",
     "next": "16.0.8",

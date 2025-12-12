@@ -27,7 +27,7 @@ async function restRequest<T>(
     } as any,
   });
 
-  if (!res.ok) {
+    if (!res.ok) {
     let msg: string;
     try {
       const text = await res.text();
@@ -38,13 +38,20 @@ async function restRequest<T>(
     return { data: null, error: { message: msg } };
   }
 
+  // For 204 or empty body, just treat as success with no data
+  const text = await res.text();
+  if (!text) {
+    return { data: null, error: null };
+  }
+
   try {
-    const data = (await res.json()) as T;
+    const data = JSON.parse(text) as T;
     return { data, error: null };
   } catch {
     return { data: null, error: { message: "Invalid JSON from Supabase" } };
   }
 }
+
 
 export async function upsertGame(
   row: GameRow

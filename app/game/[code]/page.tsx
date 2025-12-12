@@ -2,58 +2,21 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { fetchGameByCode, GameRow } from "../../lib/supabaseClient";
-
+import { fetchGameByCode } from "../../lib/supabaseClient";
+import type { GameRow } from "../../lib/supabaseClient";
 import { shuffleArray } from "../../lib/shuffle";
 
-
-
-type Cell = {
-  title: string | null;
-  marked: boolean;
-  isFree?: boolean;
-};
-
-type CardGrid = Cell[][]; // 5x5
-
+// Strip artist so cards only show the song title
 function songTitleOnly(label: string): string {
   const parts = label.split(" - ");
   if (parts.length >= 2) return parts.slice(1).join(" - ").trim();
   return label;
 }
 
-function createNewCard(allSongs: string[]): CardGrid {
-  const cleaned = allSongs.map(songTitleOnly);
-  const unique = Array.from(new Set(cleaned));
-  const shuffled = shuffleArray(unique);
-  const needed = 25 - 1; // 24 cells + 1 free
-  const use = shuffled.slice(0, Math.min(needed, shuffled.length));
-
-  // Fill row-major 5x5, with center as FREE and null title
-  const grid: CardGrid = [];
-  let idx = 0;
-  for (let r = 0; r < 5; r++) {
-    const row: Cell[] = [];
-    for (let c = 0; c < 5; c++) {
-      if (r === 2 && c === 2) {
-        row.push({
-          title: null,
-          marked: true, // free space already marked
-          isFree: true,
-        });
-      } else {
-        const title = idx < use.length ? use[idx] : null;
-        row.push({
-          title,
-          marked: false,
-        });
-        idx++;
-      }
-    }
-    grid.push(row);
-  }
-  return grid;
-}
+type Cell = {
+  label: string;
+  isFree: boolean;
+};
 
 export default function GamePage() {
   const params = useParams<{ code: string }>();
@@ -62,170 +25,233 @@ export default function GamePage() {
   const [game, setGame] = useState<GameRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [card, setCard] = useState<CardGrid | null>(null);
 
-  // Fetch game and poll
+  const [cells, setCells] = useState<Cell[]>([]);
+  const [marked, setMarked] = useState<boolean[]>([]);
+  const [hasBingo, setHasBingo] = useState(false);
+  const [clickError, setClickError] = useState<string | null>(null);
+
+  // Load game data periodically so we know what songs have been played
   useEffect(() => {
     if (!code) return;
 
     let cancelled = false;
 
     const fetchGame = async () => {
-    const { data, error } = await fetchGameByCode(code);
-
+      const { data, error } = await fetchGameByCode(code);
 
       if (cancelled) return;
 
-      if (error || !data) {
+      if (error) {
+        console.error("Error loading game:", error);
+        setErrorMsg("Failed to load game from server.");
+        setGame(null);
+      } else if (!data) {
         setErrorMsg("Game not found. Check the code.");
         setGame(null);
       } else {
         setErrorMsg(null);
-        setGame(data as GameRow);
+        setGame(data);
       }
       setLoading(false);
     };
 
     fetchGame();
-    const intervalId = setInterval(fetchGame, 2000);
+    const interval = setInterval(fetchGame, 2000);
 
     return () => {
       cancelled = true;
-      clearInterval(intervalId);
+      clearInterval(interval);
     };
   }, [code]);
 
-  // Build or load card once we know the song list
+  // Titles that have actually been played so far
+  const playedTitles = useMemo(() => {
+    if (!game) return new Set<string>();
+
+    const { songs, current_index, revealed } = game;
+
+    // If current song is revealed, it counts as played
+    const lastPlayedIndex = revealed ? current_index : current_index - 1;
+    const used: string[] =
+      lastPlayedIndex >= 0 ? songs.slice(0, lastPlayedIndex + 1) : [];
+
+    const titleOnly = used.map(songTitleOnly);
+    return new Set(titleOnly);
+  }, [game]);
+
+  // Build card cells (24 songs + 1 FREE space) once game data is available
   useEffect(() => {
     if (!game) return;
-    if (!game.songs || game.songs.length === 0) return;
-    if (typeof window === "undefined") return;
+    if (cells.length > 0) return; // already built
 
-    const storageKey = `bingo-card-${code}`;
-    const raw = window.localStorage.getItem(storageKey);
+    const allTitles = game.songs.map(songTitleOnly);
+    const shuffled = shuffleArray(allTitles);
+    const needed = 24; // 5x5 minus the free center
+    const picked = shuffled.slice(0, needed);
 
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as CardGrid;
-        setCard(parsed);
-        return;
-      } catch {
-        // fall through to new card
+    const newCells: Cell[] = [];
+    let idx = 0;
+    for (let i = 0; i < 25; i++) {
+      if (i === 12) {
+        // center free
+        newCells.push({ label: "FREE", isFree: true });
+      } else {
+        newCells.push({ label: picked[idx] || "", isFree: false });
+        idx++;
       }
     }
 
-    const grid = createNewCard(game.songs);
-    setCard(grid);
-    window.localStorage.setItem(storageKey, JSON.stringify(grid));
-  }, [game, code]);
+    const initialMarked = Array(25).fill(false);
+    initialMarked[12] = true; // FREE is always marked
 
-  // Save card whenever it changes
-  useEffect(() => {
-    if (!card || typeof window === "undefined" || !code) return;
-    const storageKey = `bingo-card-${code}`;
-    window.localStorage.setItem(storageKey, JSON.stringify(card));
-  }, [card, code]);
+    setCells(newCells);
+    setMarked(initialMarked);
+  }, [game, cells.length]);
 
-  const playableTitles = useMemo(() => {
-    if (!game) return new Set<string>();
-    const { songs, current_index, revealed } = game;
-    const visibleCount = revealed ? current_index + 1 : current_index;
-    const slice = songs.slice(0, Math.max(0, visibleCount));
-    return new Set(slice.map(songTitleOnly));
-  }, [game]);
+  // Simple bingo check (rows, columns, diagonals)
+  const checkBingo = (nextMarked: boolean[]) => {
+    const isMarked = (idx: number) => nextMarked[idx];
 
-  const handleCellClick = (r: number, c: number) => {
-    if (!card) return;
-    const cell = card[r][c];
+    const lines: number[][] = [];
 
-    if (cell.isFree) {
-      // allow toggling free if you want, or keep it always marked
-      // here we keep it always marked
-      return;
+    // Rows
+    for (let r = 0; r < 5; r++) {
+      const row: number[] = [];
+      for (let c = 0; c < 5; c++) {
+        row.push(r * 5 + c);
+      }
+      lines.push(row);
     }
 
-    if (!cell.title) {
-      return;
+    // Columns
+    for (let c = 0; c < 5; c++) {
+      const col: number[] = [];
+      for (let r = 0; r < 5; r++) {
+        col.push(r * 5 + c);
+      }
+      lines.push(col);
     }
 
-    // Only allow marking if this title is playable (song has been played)
-    if (!playableTitles.has(cell.title)) {
-      return;
-    }
+    // Diagonals
+    lines.push([0, 6, 12, 18, 24]);
+    lines.push([4, 8, 12, 16, 20]);
 
-    const updated: CardGrid = card.map((row, ri) =>
-      row.map((col, ci) => {
-        if (ri === r && ci === c) {
-          return { ...col, marked: !col.marked };
-        }
-        return col;
-      })
+    const hasLine = lines.some((line) =>
+      line.every((idx) => isMarked(idx))
     );
-    setCard(updated);
+
+    if (hasLine) {
+      setHasBingo(true);
+    }
+  };
+
+  const handleCellClick = (index: number) => {
+    if (!game || cells.length === 0) return;
+
+    const cell = cells[index];
+    if (cell.isFree) return; // ignore FREE cell click
+
+    const label = cell.label;
+    const titleOnly = songTitleOnly(label);
+
+    // Block marking if the song has NOT been played yet
+    if (!playedTitles.has(titleOnly)) {
+      setClickError("That song has not been played yet!");
+      setTimeout(() => setClickError(null), 1500);
+      return;
+    }
+
+    setClickError(null);
+
+    setMarked((prev) => {
+      const next = [...prev];
+      next[index] = !next[index];
+      checkBingo(next);
+      return next;
+    });
   };
 
   if (!code) {
     return (
       <main className="min-h-screen flex items-center justify-center bg-black text-white font-['Press_Start_2P']">
         <div className="text-center">
-          <h1 className="text-2xl mb-4">JOIN GAME</h1>
+          <h1 className="text-2xl mb-4">MUSIC BINGO</h1>
           <p className="text-sm opacity-80">No game code in URL.</p>
         </div>
       </main>
     );
   }
 
-  if (loading || !game || !card) {
+  if (loading || !game) {
     return (
       <main className="min-h-screen flex items-center justify-center bg-black text-white font-['Press_Start_2P']">
         <div className="text-center">
-          <h1 className="text-2xl mb-4">JOINED GAME: {code}</h1>
-          {errorMsg ? (
-            <p className="text-sm opacity-80">{errorMsg}</p>
-          ) : (
-            <p className="text-sm opacity-80">Loading card...</p>
-          )}
+          <h1 className="text-2xl mb-4">MUSIC BINGO</h1>
+          <p className="text-sm opacity-80">
+            {errorMsg ?? "Loading game..."}
+          </p>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-black text-white font-['Press_Start_2P'] flex flex-col items-center justify-center p-4">
-      <div className="mb-4 text-center">
-        <div className="text-xs opacity-60 mb-1">GAME CODE</div>
-        <div className="text-2xl tracking-[0.4em]">{code}</div>
-        <div className="text-[10px] opacity-60 mt-1">
-          Tap a song only after it has been played.
+    <main className="min-h-screen bg-black text-white font-['Press_Start_2P'] flex flex-col items-center justify-start p-4">
+      <div className="w-full max-w-md mx-auto mt-4">
+        <div className="text-center mb-2">
+          <div className="text-xs opacity-70 mb-1">GAME CODE</div>
+          <div className="text-2xl tracking-[0.4em] bg-black/70 px-4 py-2 rounded-lg border border-white/30 inline-block">
+            {code}
+          </div>
         </div>
-      </div>
 
-      <div className="grid grid-cols-5 gap-1 w-full max-w-md aspect-square">
-        {card.map((row, r) =>
-          row.map((cell, c) => {
-            const isCenter = cell.isFree;
-            const playable =
-              isCenter || (cell.title ? playableTitles.has(cell.title) : false);
+        <h1 className="text-xl text-center mb-2">MUSIC BINGO</h1>
 
-            const baseClasses =
-              "flex items-center justify-center text-[9px] sm:text-xs md:text-sm text-center p-1 sm:p-2 border border-white/30";
-            const markedClasses = cell.marked
-              ? "bg-lime-400 text-black shadow-[0_0_12px_#a3e635]"
-              : playable
-              ? "bg-black/70"
-              : "bg-black/40 opacity-50";
+        {clickError && (
+          <div className="text-xs text-red-400 text-center mb-2">
+            {clickError}
+          </div>
+        )}
 
+        {hasBingo && (
+          <div className="text-sm text-lime-400 text-center mb-2">
+            BINGO! 🎉 Show this screen to the host.
+          </div>
+        )}
+
+        {errorMsg && !loading && (
+          <div className="text-xs text-red-400 text-center mb-2">
+            {errorMsg}
+          </div>
+        )}
+
+        {/* Bingo card */}
+        <div className="grid grid-cols-5 gap-1 mt-2 bg-black/80 border border-white/40 rounded-xl p-1 shadow-[0_0_25px_rgba(0,255,255,0.4)]">
+          {cells.map((cell, index) => {
+            const isMarked = marked[index];
             return (
               <button
-                key={`${r}-${c}`}
-                onClick={() => handleCellClick(r, c)}
-                className={`${baseClasses} ${markedClasses}`}
+                key={index}
+                onClick={() => handleCellClick(index)}
+                className={`aspect-square text-[9px] leading-tight md:text-xs px-1 py-1 rounded-md border
+                  ${
+                    cell.isFree
+                      ? "bg-purple-700/80 border-purple-300 text-white"
+                      : isMarked
+                      ? "bg-lime-400 text-black border-lime-200 shadow-[0_0_10px_rgba(190,242,100,0.9)]"
+                      : "bg-black/60 border-white/40 text-white hover:bg-white/10"
+                  }`}
               >
-                {isCenter ? "FREE" : cell.title ?? ""}
+                {cell.label}
               </button>
             );
-          })
-        )}
+          })}
+        </div>
+
+        <p className="text-[10px] text-center text-slate-400 mt-3">
+          You can only mark songs that have already been played.
+        </p>
       </div>
     </main>
   );

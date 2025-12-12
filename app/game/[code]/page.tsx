@@ -2,15 +2,11 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { supabase } from "../../lib/supabaseClient";
+import { fetchGameByCode, GameRow } from "../../lib/supabaseClient";
+
 import { shuffleArray } from "../../lib/shuffle";
 
-type GameRow = {
-  code: string;
-  songs: string[];
-  current_index: number;
-  revealed: boolean;
-};
+
 
 type Cell = {
   title: string | null;
@@ -75,11 +71,8 @@ export default function GamePage() {
     let cancelled = false;
 
     const fetchGame = async () => {
-      const { data, error } = await supabase
-        .from("games")
-        .select("code,songs,current_index,revealed")
-        .eq("code", code)
-        .maybeSingle();
+    const { data, error } = await fetchGameByCode(code);
+
 
       if (cancelled) return;
 

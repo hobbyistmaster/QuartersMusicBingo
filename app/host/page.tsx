@@ -4,13 +4,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { parseBlob } from "music-metadata-browser";
 import { shuffleArray } from "../lib/shuffle";
 import { themes } from "../data/themes";
-import { supabase } from "../lib/supabaseClient";
+import { upsertGame, updateGameState } from "../lib/supabaseClient";
 
-// Hard-coded PIN for host screen – change this to whatever you want
-const HOST_PIN = "1234";
+const HOST_PIN = "1999";
 const HOST_AUTH_KEY = "music-bingo-host-auth-v2";
 
-/* Generate 4-letter game code */
 function generateCode(length = 4) {
   const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
   let out = "";
@@ -20,7 +18,6 @@ function generateCode(length = 4) {
   return out;
 }
 
-/* Clean filename fallback */
 function cleanFileName(name: string): string {
   let base = name.replace(/\.[^/.]+$/, "");
   base = base.replace(/^[0-9]+[\s._-]+/, "");
@@ -34,7 +31,6 @@ function cleanFileName(name: string): string {
   return base.trim();
 }
 
-/* Extract label from ID3 tags */
 async function getLabelForFile(file: File): Promise<string> {
   try {
     const metadata = await parseBlob(file);
@@ -51,7 +47,8 @@ async function getLabelForFile(file: File): Promise<string> {
   }
 }
 
-/* ---------- OUTER: handles PIN only ---------- */
+/* =====================  OUTER HOST (PIN GATE)  ===================== */
+
 export default function HostPage() {
   const [authorized, setAuthorized] = useState(false);
   const [pinInput, setPinInput] = useState("");
@@ -114,11 +111,11 @@ export default function HostPage() {
   return <HostMain />;
 }
 
-/* ---------- INNER: actual host game logic ---------- */
+/* =====================  INNER HOST (GAME LOGIC)  ===================== */
 
 function HostMain() {
   const [selectedThemeKey, setSelectedThemeKey] = useState<string>("80s");
-  const selectedTheme = (themes as any)[selectedThemeKey] ?? {
+  const selectedTheme: any = (themes as any)[selectedThemeKey] ?? {
     displayName: selectedThemeKey,
     slug: selectedThemeKey,
   };
@@ -134,7 +131,7 @@ function HostMain() {
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // When theme changes, try to load saved titles from localStorage
+  // When theme changes, reset + load any saved titles from localStorage
   useEffect(() => {
     setFiles([]);
     setBaseTitles([]);
@@ -152,12 +149,12 @@ function HostMain() {
         const titles = JSON.parse(raw) as string[];
         setBaseTitles(titles);
       } catch {
-        // ignore
+        // ignore bad JSON
       }
     }
   }, [selectedThemeKey, selectedTheme.slug]);
 
-  // Handle MP3 file selection → build song titles + save to local theme
+  // Handle file input
   const handleFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const arr = e.target.files ? Array.from(e.target.files) : [];
     setFiles(arr);
@@ -179,10 +176,12 @@ function HostMain() {
     }
   };
 
-  // Start a new game: shuffle and save to Supabase
+  // Start a new game
   const startGame = async () => {
     if (baseTitles.length === 0) {
-      alert("No songs available. Load MP3 files or use a theme with saved titles.");
+      alert(
+        "No songs available. Load MP3 files or use a theme with saved titles."
+      );
       return;
     }
 
@@ -210,8 +209,8 @@ function HostMain() {
       audioRef.current.currentTime = 0;
     }
 
-    // Save to Supabase so TV + phones can see it
-    const { error } = await supabase.from("games").upsert({
+    // Save to Supabase (via REST helper) so TV + phones can see it
+    const { error } = await upsertGame({
       code: newCode,
       songs: shuffledLabels,
       current_index: 0,
@@ -226,30 +225,21 @@ function HostMain() {
     }
   };
 
-  // Whenever currentStep / revealed changes, update Supabase
+  // Update Supabase whenever step/revealed changes
   useEffect(() => {
     if (!code || playLabels.length === 0) return;
 
-    const updateGame = async () => {
-      const { error } = await supabase
-        .from("games")
-        .update({
-          current_index: currentStep,
-          revealed,
-        })
-        .eq("code", code);
-
+    const doUpdate = async () => {
+      const { error } = await updateGameState(code, currentStep, revealed);
       if (error) {
         console.error("Supabase update error:", error);
       }
     };
 
-    updateGame();
+    doUpdate();
   }, [code, currentStep, revealed, playLabels.length]);
 
-
-
-  // Current song & audio
+  // Current file + label
   const currentFile =
     playFiles.length > 0 && currentStep < playFiles.length
       ? playFiles[currentStep]
@@ -260,6 +250,7 @@ function HostMain() {
       ? playLabels[currentStep]
       : "(titles only mode)";
 
+  // Load audio when file changes
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -297,11 +288,13 @@ function HostMain() {
       alert("Start the game first to generate a code.");
       return;
     }
-    window.open(`/tv/${code}`, "_blank", "noopener,noreferrer");
+    if (typeof window !== "undefined") {
+      window.open(`/tv/${code}`, "_blank", "noopener,noreferrer");
+    }
   };
 
   return (
-    <main className="min-h-screen text-white p-4 flex justify-center overflow-auto font-['Press_Start_2P']">
+    <main className="min-h-screen text-white p-4 flex justify-center overflow-auto font-['Press_Start_2P'] bg-black">
       <div
         style={{ transform: "scale(0.92)", transformOrigin: "top center" }}
         className="w-full max-w-4xl flex flex-col items-center"
@@ -318,7 +311,7 @@ function HostMain() {
             value={selectedThemeKey}
             onChange={(e) => setSelectedThemeKey(e.target.value)}
           >
-            {Object.entries(themes).map(([key, info]: any) => (
+            {Object.entries(themes as any).map(([key, info]: any) => (
               <option key={key} value={key}>
                 {info.displayName}
               </option>
@@ -347,8 +340,8 @@ function HostMain() {
           </p>
         )}
 
-        {/* Host Controls */}
-        <div className="flex flex-wrap gap-4 mb-6">
+        {/* Host Buttons */}
+        <div className="flex flex-wrap gap-4 mb-6 justify-center">
           <button
             onClick={startGame}
             className="px-6 py-3 rounded bg-lime-400 text-black shadow-[0_0_12px_#a3e635] hover:bg-lime-300"
@@ -379,13 +372,13 @@ function HostMain() {
                        text-xs"
           />
           <p className="text-xs opacity-70 mt-2">
-            Use this to auto-generate song titles for this theme. They&apos;ll be saved
-            on this computer so you don&apos;t have to reload next time.
+            Use this to auto-generate song titles for this theme. They&apos;ll be
+            saved on this computer so you don&apos;t have to reload next time.
           </p>
         </div>
 
         {/* Now Playing */}
-        <div className="w-full max-w-xl bg黑/60 border border-white/20 rounded-xl p-4">
+        <div className="w-full max-w-xl bg-black/60 border border-white/20 rounded-xl p-4">
           <h2 className="text-xl mb-3 text-center">NOW PLAYING</h2>
 
           <p className="text-sm opacity-70 mb-1">Song:</p>
@@ -396,7 +389,7 @@ function HostMain() {
 
           <audio ref={audioRef} controls className="w-full mb-4" />
 
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-3 justify-center">
             <button
               onClick={playCurrent}
               className="px-4 py-2 rounded bg-lime-400 text-black shadow-[0_0_10px_#a3e635] hover:bg-lime-300"

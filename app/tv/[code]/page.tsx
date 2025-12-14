@@ -90,10 +90,10 @@ export default function TvPage() {
       <div className="relative z-10 min-h-screen p-6">
         {/* 50/50 split */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-[calc(100vh-3rem)]">
-          {/* LEFT HALF: CODE + NOW PLAYING */}
-          <div className="flex flex-col gap-6">
-            {/* Code */}
-            <div className="bg-black/70 border-2 border-cyan-400/70 rounded-2xl p-5 shadow-[0_0_28px_rgba(34,211,238,0.35)]">
+          {/* LEFT HALF: 30% CODE / 70% NOW PLAYING */}
+          <div className="grid grid-rows-[3fr_7fr] gap-6">
+            {/* Code (30%) */}
+            <div className="bg-black/70 border-2 border-cyan-400/70 rounded-2xl p-5 shadow-[0_0_28px_rgba(34,211,238,0.35)] flex flex-col justify-center">
               <div className="text-center text-[10px] opacity-75 mb-2">
                 SHOW THIS CODE TO JOIN
               </div>
@@ -104,8 +104,8 @@ export default function TvPage() {
               </div>
             </div>
 
-            {/* Now Playing */}
-            <div className="flex-1 bg-black/70 border-2 border-fuchsia-400/70 rounded-2xl p-6 shadow-[0_0_28px_rgba(217,70,239,0.35)] flex flex-col justify-center">
+            {/* Now Playing (70%) */}
+            <div className="bg-black/70 border-2 border-fuchsia-400/70 rounded-2xl p-6 shadow-[0_0_28px_rgba(217,70,239,0.35)] flex flex-col justify-center">
               <div className="text-center text-lg md:text-xl mb-4">NOW PLAYING</div>
 
               {status && !game && (
@@ -119,14 +119,14 @@ export default function TvPage() {
               )}
 
               {game && game.revealed && (
-                <div className="text-center text-xl md:text-3xl leading-snug break-words px-2">
+                <div className="text-center text-2xl md:text-4xl leading-snug break-words px-2">
                   {currentSong ?? "—"}
                 </div>
               )}
             </div>
           </div>
 
-          {/* RIGHT HALF: SONGS PLAYED (2 columns) */}
+          {/* RIGHT HALF: SONGS PLAYED - 3 columns, row-wise 1-3 then 4-6 */}
           <div className="bg-black/70 border-2 border-cyan-400/70 rounded-2xl p-5 shadow-[0_0_28px_rgba(34,211,238,0.35)] flex flex-col">
             <div className="text-center text-lg md:text-xl mb-3">SONGS PLAYED</div>
 
@@ -135,17 +135,11 @@ export default function TvPage() {
                 No songs played yet.
               </div>
             ) : (
-              <div
-                className="flex-1 overflow-y-auto pr-2"
-                style={{
-                  columnCount: 2,
-                  columnGap: "18px",
-                }}
-              >
+              <ol className="flex-1 overflow-y-auto pr-2 grid grid-cols-3 gap-x-6 gap-y-2">
                 {playedList.map((title, idx) => (
-                  <div
+                  <li
                     key={`${idx}-${title}`}
-                    className="break-inside-avoid mb-2 border-b border-white/10 pb-2"
+                    className="border-b border-white/10 pb-2"
                   >
                     <div className="text-[10px] text-white/60 mb-1">
                       {idx + 1}.
@@ -153,9 +147,9 @@ export default function TvPage() {
                     <div className="text-xs md:text-sm leading-snug break-words">
                       {title}
                     </div>
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ol>
             )}
           </div>
         </div>

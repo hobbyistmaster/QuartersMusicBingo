@@ -20,7 +20,6 @@ export default function TvPage() {
   const [game, setGame] = useState<GameRow | null>(null);
   const [status, setStatus] = useState<string>("Loading...");
 
-  // Poll game state
   useEffect(() => {
     if (!code) return;
 
@@ -35,7 +34,6 @@ export default function TvPage() {
         setGame(null);
         return;
       }
-
       if (!data) {
         setStatus("Game not found.");
         setGame(null);
@@ -87,45 +85,50 @@ export default function TvPage() {
         backgroundColor: "black",
       }}
     >
-      {/* overlay for readability */}
       <div className="absolute inset-0 bg-black/55" />
 
       <div className="relative z-10 min-h-screen p-6">
-        {/* TOP */}
-        <div className="flex flex-col items-center text-center mb-6">
-          <div className="text-[10px] opacity-75 mb-2">SHOW THIS CODE TO JOIN</div>
-
-          <div className="text-6xl md:text-7xl tracking-[0.55em] bg-black/80 px-8 py-6 rounded-2xl border-2 border-cyan-400 shadow-[0_0_26px_#22d3ee]">
-            {code}
-          </div>
-        </div>
-
-        {/* MAIN LAYOUT */}
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_520px] gap-6 items-stretch">
-          {/* LEFT: NOW PLAYING */}
-          <div className="bg-black/70 border-2 border-fuchsia-400/70 rounded-2xl p-6 shadow-[0_0_28px_rgba(217,70,239,0.35)] flex flex-col justify-center">
-            <div className="text-center text-xl md:text-2xl mb-4">NOW PLAYING</div>
-
-            {status && !game && (
-              <div className="text-center text-sm opacity-80">{status}</div>
-            )}
-
-            {game && !game.revealed && (
-              <div className="text-center text-lg opacity-80">
-                Song is hidden…
+        {/* 50/50 split */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-[calc(100vh-3rem)]">
+          {/* LEFT HALF: CODE + NOW PLAYING */}
+          <div className="flex flex-col gap-6">
+            {/* Code */}
+            <div className="bg-black/70 border-2 border-cyan-400/70 rounded-2xl p-5 shadow-[0_0_28px_rgba(34,211,238,0.35)]">
+              <div className="text-center text-[10px] opacity-75 mb-2">
+                SHOW THIS CODE TO JOIN
               </div>
-            )}
-
-            {game && game.revealed && (
-              <div className="text-center text-2xl md:text-4xl leading-snug break-words">
-                {currentSong ?? "—"}
+              <div className="flex justify-center">
+                <div className="text-5xl md:text-6xl tracking-[0.55em] bg-black/80 px-8 py-5 rounded-2xl border-2 border-cyan-400 shadow-[0_0_22px_#22d3ee]">
+                  {code}
+                </div>
               </div>
-            )}
+            </div>
+
+            {/* Now Playing */}
+            <div className="flex-1 bg-black/70 border-2 border-fuchsia-400/70 rounded-2xl p-6 shadow-[0_0_28px_rgba(217,70,239,0.35)] flex flex-col justify-center">
+              <div className="text-center text-lg md:text-xl mb-4">NOW PLAYING</div>
+
+              {status && !game && (
+                <div className="text-center text-sm opacity-80">{status}</div>
+              )}
+
+              {game && !game.revealed && (
+                <div className="text-center text-base md:text-lg opacity-80">
+                  Song is hidden…
+                </div>
+              )}
+
+              {game && game.revealed && (
+                <div className="text-center text-xl md:text-3xl leading-snug break-words px-2">
+                  {currentSong ?? "—"}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* RIGHT: PLAYED SONGS (2 columns) */}
+          {/* RIGHT HALF: SONGS PLAYED (2 columns) */}
           <div className="bg-black/70 border-2 border-cyan-400/70 rounded-2xl p-5 shadow-[0_0_28px_rgba(34,211,238,0.35)] flex flex-col">
-            <div className="text-center text-xl mb-3">SONGS PLAYED</div>
+            <div className="text-center text-lg md:text-xl mb-3">SONGS PLAYED</div>
 
             {playedList.length === 0 ? (
               <div className="text-center text-sm opacity-75">
@@ -135,7 +138,6 @@ export default function TvPage() {
               <div
                 className="flex-1 overflow-y-auto pr-2"
                 style={{
-                  // ✅ 2 columns
                   columnCount: 2,
                   columnGap: "18px",
                 }}

@@ -1,16 +1,16 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { fetchGameByCode, GameRow } from "../../lib/supabaseClient";
+import { fetchGameByCode } from "../../lib/supabaseClient";
+import type { GameRow } from "../../lib/supabaseClient";
 
-
-
-
-function songTitleOnly(label: string): string {
-  const parts = label.split(" - ");
-  if (parts.length >= 2) return parts.slice(1).join(" - ").trim();
-  return label;
+// Song title only (strip artist if label is "Artist - Song")
+function songOnly(label: string) {
+  const raw = (label || "").trim();
+  const parts = raw.split(" - ");
+  const out = parts.length > 1 ? parts.slice(1).join(" - ") : raw;
+  return out.replace(/\s+/g, " ").trim();
 }
 
 export default function TvPage() {
@@ -18,148 +18,144 @@ export default function TvPage() {
   const code = (params?.code || "").toString().toUpperCase();
 
   const [game, setGame] = useState<GameRow | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [status, setStatus] = useState<string>("Loading...");
 
-  // Fetch game once + start polling
+  // Poll game state
   useEffect(() => {
     if (!code) return;
 
-    let cancelled = false;
+    let alive = true;
 
-    const fetchGame = async () => {
-const { data, error } = await fetchGameByCode(code);
+    const load = async () => {
+      const { data, error } = await fetchGameByCode(code);
+      if (!alive) return;
 
-
-      if (cancelled) return;
-
-      if (error || !data) {
-        setErrorMsg("Game not found. Check the code.");
+      if (error) {
+        setStatus("Failed to load game.");
         setGame(null);
-      } else {
-        setErrorMsg(null);
-        setGame(data as GameRow);
+        return;
       }
-      setLoading(false);
+
+      if (!data) {
+        setStatus("Game not found.");
+        setGame(null);
+        return;
+      }
+
+      setStatus("");
+      setGame(data);
     };
 
-    fetchGame();
-
-    const intervalId = setInterval(fetchGame, 2000);
-
+    load();
+    const id = setInterval(load, 1000);
     return () => {
-      cancelled = true;
-      clearInterval(intervalId);
+      alive = false;
+      clearInterval(id);
     };
   }, [code]);
+
+  const currentSong = useMemo(() => {
+    if (!game) return null;
+    const idx = game.current_index;
+    if (!game.revealed) return null;
+    if (idx < 0 || idx >= game.songs.length) return null;
+    return songOnly(game.songs[idx]);
+  }, [game]);
+
+  const playedList = useMemo(() => {
+    if (!game) return [];
+    const last = game.revealed ? game.current_index : game.current_index - 1;
+    if (last < 0) return [];
+    return game.songs.slice(0, last + 1).map(songOnly);
+  }, [game]);
 
   if (!code) {
     return (
       <main className="min-h-screen flex items-center justify-center bg-black text-white font-['Press_Start_2P']">
-        <div className="text-center">
-          <h1 className="text-2xl mb-4">TV DISPLAY</h1>
-          <p className="text-sm opacity-80">No game code in URL.</p>
-        </div>
+        No code in URL.
       </main>
     );
   }
-
-  if (loading) {
-    return (
-      <main className="min-h-screen flex items-center justify-center bg-black text-white font-['Press_Start_2P']">
-        <div className="text-center">
-          <h1 className="text-2xl mb-4">TV DISPLAY</h1>
-          <p className="text-sm opacity-80">Loading game...</p>
-        </div>
-      </main>
-    );
-  }
-
-  if (!game) {
-    return (
-      <main className="min-h-screen flex items-center justify-center bg-black text-white font-['Press_Start_2P']">
-        <div className="text-center">
-          <h1 className="text-2xl mb-4">TV DISPLAY</h1>
-          <p className="text-sm opacity-80">{errorMsg ?? "Game not found."}</p>
-        </div>
-      </main>
-    );
-  }
-
-  const { songs, current_index, revealed } = game;
-
-  const currentSongRaw =
-    current_index >= 0 && current_index < songs.length
-      ? songs[current_index]
-      : null;
-
-  const currentSong = currentSongRaw ? songTitleOnly(currentSongRaw) : null;
-
-  // All fully "played" songs:
-  // If revealed, include current_index too; if not, only indices < current_index
-  const lastPlayedIndex = revealed ? current_index : current_index - 1;
-  const playedRaw =
-    lastPlayedIndex >= 0 ? songs.slice(0, lastPlayedIndex + 1) : [];
-  const playedList = playedRaw.map(songTitleOnly);
 
   return (
-    <main className="min-h-screen bg-black text-white font-['Press_Start_2P'] flex flex-col p-4 md:p-8">
-      <div className="flex flex-col md:flex-row gap-6 w-full h-full">
-        {/* LEFT: Game code + current song */}
-        <div className="flex-1 flex flex-col items-center justify-center">
-          {/* GAME CODE */}
-          <div className="mb-8 text-center">
-            <div className="text-sm md:text-base opacity-70 mb-1">
-              JOIN CODE
-            </div>
-            <div className="text-5xl md:text-7xl tracking-[0.6em] bg-black/70 px-6 md:px-10 py-4 md:py-6 rounded-xl border border-white/40 shadow-[0_0_40px_rgba(255,255,255,0.3)]">
-              {code}
-            </div>
+    <main
+      className="min-h-screen relative overflow-hidden text-white font-['Press_Start_2P']"
+      style={{
+        backgroundImage: "url(/logo.jpg)",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundColor: "black",
+      }}
+    >
+      {/* overlay for readability */}
+      <div className="absolute inset-0 bg-black/55" />
+
+      <div className="relative z-10 min-h-screen p-6">
+        {/* TOP */}
+        <div className="flex flex-col items-center text-center mb-6">
+          <div className="text-[10px] opacity-75 mb-2">SHOW THIS CODE TO JOIN</div>
+
+          <div className="text-6xl md:text-7xl tracking-[0.55em] bg-black/80 px-8 py-6 rounded-2xl border-2 border-cyan-400 shadow-[0_0_26px_#22d3ee]">
+            {code}
           </div>
+        </div>
 
-          {/* NOW PLAYING */}
-          <div className="w-full max-w-2xl bg-black/70 border border-white/30 rounded-xl px-6 py-4 shadow-[0_0_30px_rgba(0,255,255,0.3)]">
-            <h2 className="text-xl md:text-2xl mb-3 text-center">
-              NOW PLAYING
-            </h2>
+        {/* MAIN LAYOUT */}
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_520px] gap-6 items-stretch">
+          {/* LEFT: NOW PLAYING */}
+          <div className="bg-black/70 border-2 border-fuchsia-400/70 rounded-2xl p-6 shadow-[0_0_28px_rgba(217,70,239,0.35)] flex flex-col justify-center">
+            <div className="text-center text-xl md:text-2xl mb-4">NOW PLAYING</div>
 
-            {currentSong && revealed ? (
-              <div className="text-center text-2xl md:text-3xl mt-2">
-                {currentSong}
+            {status && !game && (
+              <div className="text-center text-sm opacity-80">{status}</div>
+            )}
+
+            {game && !game.revealed && (
+              <div className="text-center text-lg opacity-80">
+                Song is hidden…
               </div>
-            ) : (
-              <div className="text-center text-base md:text-lg opacity-70 mt-2">
-                Song is hidden
+            )}
+
+            {game && game.revealed && (
+              <div className="text-center text-2xl md:text-4xl leading-snug break-words">
+                {currentSong ?? "—"}
               </div>
             )}
           </div>
-        </div>
 
-        {/* RIGHT: List of played songs */}
-        <div className="flex-grow max-w-[600px] bg-black/60 p-4 md:p-5 rounded-xl border border-white/20 overflow-hidden flex flex-col">
-          <h2 className="text-xl md:text-2xl font-bold mb-3 text-center">
-            Songs Already Played
-          </h2>
+          {/* RIGHT: PLAYED SONGS (2 columns) */}
+          <div className="bg-black/70 border-2 border-cyan-400/70 rounded-2xl p-5 shadow-[0_0_28px_rgba(34,211,238,0.35)] flex flex-col">
+            <div className="text-center text-xl mb-3">SONGS PLAYED</div>
 
-          {playedList.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center">
-              No songs played yet.
-            </p>
-          ) : (
-            <ol className="mt-2 space-y-1 text-xs md:text-sm overflow-y-auto flex-1 pr-1">
-              {playedList.map((title, index) => (
-                <li
-                  key={`${index}-${title}`}
-                  className="truncate border-b border-zinc-800 pb-1 last:border-b-0"
-                >
-                  <span className="text-gray-400 mr-2">
-                    {index + 1}.
-                  </span>
-                  <span className="text-gray-100">{title}</span>
-                </li>
-              ))}
-            </ol>
-          )}
+            {playedList.length === 0 ? (
+              <div className="text-center text-sm opacity-75">
+                No songs played yet.
+              </div>
+            ) : (
+              <div
+                className="flex-1 overflow-y-auto pr-2"
+                style={{
+                  // ✅ 2 columns
+                  columnCount: 2,
+                  columnGap: "18px",
+                }}
+              >
+                {playedList.map((title, idx) => (
+                  <div
+                    key={`${idx}-${title}`}
+                    className="break-inside-avoid mb-2 border-b border-white/10 pb-2"
+                  >
+                    <div className="text-[10px] text-white/60 mb-1">
+                      {idx + 1}.
+                    </div>
+                    <div className="text-xs md:text-sm leading-snug break-words">
+                      {title}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </main>

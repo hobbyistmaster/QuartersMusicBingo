@@ -6,246 +6,214 @@ import { fetchGameByCode } from "../../lib/supabaseClient";
 import type { GameRow } from "../../lib/supabaseClient";
 import { shuffleArray } from "../../lib/shuffle";
 
-// Show SONG only (strip artist if your labels are "Artist - Song")
-function songTitleOnly(label: string): string {
-  const parts = label.split(" - ");
-  if (parts.length >= 2) return parts.slice(1).join(" - ").trim();
-  return label.trim();
-}
-
 type Cell = { label: string; isFree: boolean };
+
+// Normalize labels the same way everywhere
+function songOnly(label: string) {
+  const raw = (label || "").trim();
+  const parts = raw.split(" - ");
+  const out = parts.length > 1 ? parts.slice(1).join(" - ") : raw;
+  return out.replace(/\s+/g, " ").trim(); // collapse double spaces
+}
 
 export default function GamePage() {
   const params = useParams<{ code: string }>();
-  const code = (params?.code || "").toString().toUpperCase();
+  const code = (params?.code || "").toUpperCase();
 
   const [game, setGame] = useState<GameRow | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
   const [cells, setCells] = useState<Cell[]>([]);
   const [marked, setMarked] = useState<boolean[]>([]);
-  const [hasBingo, setHasBingo] = useState(false);
-  const [clickError, setClickError] = useState<string | null>(null);
+  const [bingo, setBingo] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Poll game state
   useEffect(() => {
     if (!code) return;
 
-    let cancelled = false;
+    let alive = true;
 
     const load = async () => {
-      const { data, error } = await fetchGameByCode(code);
-
-      if (cancelled) return;
-
-      if (error) {
-        console.error(error);
-        setErrorMsg("Failed to load game.");
-        setGame(null);
-      } else if (!data) {
-        setErrorMsg("Game not found. Check the code.");
-        setGame(null);
-      } else {
-        setErrorMsg(null);
-        setGame(data);
-      }
-      setLoading(false);
+      const { data } = await fetchGameByCode(code);
+      if (!alive) return;
+      if (data) setGame(data);
     };
 
     load();
-    const id = setInterval(load, 2000);
+    const id = setInterval(load, 1000);
     return () => {
-      cancelled = true;
+      alive = false;
       clearInterval(id);
     };
   }, [code]);
 
-  // Reset card if code changes (new game)
+  // Reset card when code changes
   useEffect(() => {
     setCells([]);
     setMarked([]);
-    setHasBingo(false);
-    setClickError(null);
+    setBingo(false);
+    setError(null);
   }, [code]);
 
-  // Titles that have been played so far (song-only)
-  const playedTitles = useMemo(() => {
+  // ✅ "After reveal": include current song only when revealed
+  const playedNow = useMemo(() => {
     if (!game) return new Set<string>();
 
-    const { songs, current_index, revealed } = game;
-    const lastPlayedIndex = revealed ? current_index : current_index - 1;
-    const used = lastPlayedIndex >= 0 ? songs.slice(0, lastPlayedIndex + 1) : [];
-    return new Set(used.map(songTitleOnly));
+    const last = game.revealed ? game.current_index : game.current_index - 1;
+    if (last < 0) return new Set<string>();
+
+    const list = game.songs.slice(0, last + 1).map(songOnly);
+    return new Set(list);
   }, [game]);
 
-  // Build card (always fills; pads with "—" if not enough songs)
+  // Build card ONCE
   useEffect(() => {
-    if (!game) return;
-    if (cells.length > 0) return;
+    if (!game || cells.length) return;
 
-    const allTitles = game.songs.map(songTitleOnly).filter(Boolean);
-    const shuffled = shuffleArray(allTitles);
+    const titles = shuffleArray(game.songs.map(songOnly));
+    const picked = titles.slice(0, 24);
+    while (picked.length < 24) picked.push("—");
 
-    const needed = 24; // 25 squares minus FREE
-    const picked = shuffled.slice(0, needed);
-    while (picked.length < needed) picked.push("—");
+    const card: Cell[] = [];
+    let i = 0;
 
-    const newCells: Cell[] = [];
-    let idx = 0;
-
-    for (let i = 0; i < 25; i++) {
-      if (i === 12) newCells.push({ label: "FREE", isFree: true });
-      else newCells.push({ label: picked[idx++], isFree: false });
+    for (let n = 0; n < 25; n++) {
+      if (n === 12) card.push({ label: "FREE", isFree: true });
+      else card.push({ label: picked[i++], isFree: false });
     }
 
-    const initialMarked = Array(25).fill(false);
-    initialMarked[12] = true;
-
-    setCells(newCells);
-    setMarked(initialMarked);
+    setCells(card);
+    const marks = Array(25).fill(false);
+    marks[12] = true;
+    setMarked(marks);
   }, [game, cells.length]);
 
-  const checkBingo = (nextMarked: boolean[]) => {
-    const lines: number[][] = [];
-    for (let r = 0; r < 5; r++) lines.push([r * 5, r * 5 + 1, r * 5 + 2, r * 5 + 3, r * 5 + 4]);
-    for (let c = 0; c < 5; c++) lines.push([c, c + 5, c + 10, c + 15, c + 20]);
-    lines.push([0, 6, 12, 18, 24]);
-    lines.push([4, 8, 12, 16, 20]);
+  // Count how many squares on THIS card are playable
+  const playableCount = useMemo(() => {
+    if (!cells.length) return 0;
+    return cells.reduce((acc, c) => {
+      if (c.isFree) return acc;
+      if (c.label === "—") return acc;
+      const key = songOnly(c.label);
+      return acc + (playedNow.has(key) ? 1 : 0);
+    }, 0);
+  }, [cells, playedNow]);
 
-    if (lines.some((line) => line.every((i) => nextMarked[i]))) {
-      setHasBingo(true);
-    }
-  };
+  function checkBingo(next: boolean[]) {
+    const lines = [
+      [0, 1, 2, 3, 4],
+      [5, 6, 7, 8, 9],
+      [10, 11, 12, 13, 14],
+      [15, 16, 17, 18, 19],
+      [20, 21, 22, 23, 24],
+      [0, 5, 10, 15, 20],
+      [1, 6, 11, 16, 21],
+      [2, 7, 12, 17, 22],
+      [3, 8, 13, 18, 23],
+      [4, 9, 14, 19, 24],
+      [0, 6, 12, 18, 24],
+      [4, 8, 12, 16, 20],
+    ];
 
-  const handleCellClick = (index: number) => {
-    if (!game || cells.length === 0) return;
+    if (lines.some((line) => line.every((i) => next[i]))) setBingo(true);
+  }
 
-    const cell = cells[index];
+  function clickCell(i: number) {
+    const cell = cells[i];
     if (cell.isFree) return;
 
-    const title = cell.label;
+    const key = songOnly(cell.label);
 
-    // Block marking if song has not been played yet
-    if (!playedTitles.has(title)) {
-      setClickError("That song has not been played yet!");
-      window.setTimeout(() => setClickError(null), 1500);
+    if (!playedNow.has(key)) {
+      setError("That song has not been played yet");
+      setTimeout(() => setError(null), 1500);
       return;
     }
 
-    setClickError(null);
-
-    setMarked((prev) => {
-      const next = [...prev];
-      next[index] = !next[index];
-      checkBingo(next);
-      return next;
-    });
-  };
-
-  if (!code) {
-    return (
-      <main className="min-h-screen flex items-center justify-center bg-black text-white font-['Press_Start_2P']">
-        <div className="text-center">
-          <h1 className="text-2xl mb-3">MUSIC BINGO</h1>
-          <p className="text-sm opacity-80">No game code in URL.</p>
-        </div>
-      </main>
-    );
+    const next = [...marked];
+    next[i] = !next[i];
+    setMarked(next);
+    checkBingo(next);
   }
 
-  if (loading || !game) {
+  if (!game) {
     return (
       <main className="min-h-screen flex items-center justify-center bg-black text-white font-['Press_Start_2P']">
-        <div className="text-center">
-          <h1 className="text-2xl mb-3">MUSIC BINGO</h1>
-          <p className="text-sm opacity-80">{errorMsg ?? "Loading..."}</p>
-        </div>
+        Loading…
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen relative overflow-hidden text-white font-['Press_Start_2P']">
-      {/* BACKGROUND IMAGE (same file your other pages use) */}
-      <div
-        className="absolute inset-0"
-        style={{
-          backgroundImage: "url(/logo.jpg)",
-          backgroundRepeat: "no-repeat",
-          backgroundPosition: "center",
-          backgroundSize: "cover",
-          filter: "brightness(1.15)",
-          transform: "scale(1.02)",
-        }}
-      />
-      {/* overlay for readability */}
-      <div className="absolute inset-0 bg-black/55" />
-
-      <div className="relative z-10 flex flex-col items-center p-4">
-        <div className="w-full max-w-md mx-auto mt-2">
-          <div className="text-center mb-3">
-            <div className="text-[10px] opacity-75 mb-1">GAME CODE</div>
-            <div className="text-3xl tracking-[0.35em] bg-black/80 px-6 py-3 rounded-xl border-2 border-cyan-400 shadow-[0_0_20px_#22d3ee] inline-block">
-              {code}
-            </div>
+    <main
+      className="min-h-screen p-4 text-white font-['Press_Start_2P']"
+      style={{
+        backgroundImage: "url(/logo.jpg)",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundColor: "black",
+      }}
+    >
+      <div className="min-h-screen bg-black/60 p-4">
+        <div className="max-w-md mx-auto text-center mb-3">
+          <div className="text-xs opacity-70">GAME CODE</div>
+          <div className="text-3xl tracking-[0.35em] border-2 border-cyan-400 bg-black/80 px-4 py-2 rounded-lg">
+            {code}
           </div>
 
-          <h1 className="text-xl text-center mb-2">MUSIC BINGO</h1>
-
-          {clickError && (
-            <div className="text-[10px] text-red-300 text-center mb-2 border border-red-500/50 rounded bg-black/70 px-2 py-1 shadow-[0_0_12px_#f87171]">
-              {clickError}
-            </div>
-          )}
-
-          {hasBingo && (
-            <div className="my-3 px-4 py-3 text-center text-lime-300 border-2 border-lime-400 rounded-xl bg-black/80 shadow-[0_0_25px_#a3e635] animate-pulse">
-              🎉 B I N G O 🎉
-              <div className="text-[10px] mt-1 text-white">Show this screen to the host</div>
-            </div>
-          )}
-
-          {/* CARD GRID */}
-          <div className="grid grid-cols-5 gap-1 mt-3 p-2 rounded-2xl border-2 border-cyan-400 bg-black/80 shadow-[0_0_30px_#22d3ee]">
-            {cells.map((cell, index) => {
-              const isMarked = marked[index];
-
-              return (
-                <button
-                  key={index}
-                  onClick={() => handleCellClick(index)}
-                  className={`aspect-square rounded-lg border transition-all duration-150 overflow-hidden
-                    ${
-                      cell.isFree
-                        ? "bg-purple-700/90 border-purple-300 text-white shadow-[0_0_15px_#a855f7]"
-                        : isMarked
-                        ? "bg-lime-400 text-black border-lime-200 shadow-[0_0_15px_#a3e635] scale-[1.03]"
-                        : "bg-black/70 border-white/35 text-white hover:bg-white/10 hover:shadow-[0_0_8px_#22d3ee]"
-                    }`}
-                >
-                  {/* TEXT BLEED FIX (3-line clamp + clip) */}
-                  <div className="w-full h-full p-1 flex items-center justify-center text-center overflow-hidden">
-                    <span
-                      className="block text-[8px] md:text-[10px] leading-[1.05] break-words"
-                      style={{
-                        display: "-webkit-box",
-                        WebkitLineClamp: 3,
-                        WebkitBoxOrient: "vertical",
-                        overflow: "hidden",
-                      }}
-                    >
-                      {cell.label}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
+          {/* ✅ Debug line (leave it for now) */}
+          <div className="mt-2 text-[10px] text-cyan-200 opacity-90">
+            revealed: {String(game.revealed)} | idx: {game.current_index} | playedNow:{" "}
+            {playedNow.size} | playable squares: {playableCount}
           </div>
+        </div>
 
-          <p className="text-[9px] text-center text-cyan-200 mt-3 opacity-85">
-            Only songs already played can be marked
-          </p>
+        {error && (
+          <div className="text-red-400 text-xs text-center mb-2">{error}</div>
+        )}
+
+        {bingo && (
+          <div className="text-lime-400 text-center mb-3 animate-pulse">
+            🎉 B I N G O 🎉
+          </div>
+        )}
+
+        <div className="grid grid-cols-5 gap-1 max-w-md mx-auto p-2 border-2 border-cyan-400 rounded-xl bg-black/80">
+          {cells.map((cell, i) => {
+            const isMarked = marked[i];
+            const key = songOnly(cell.label);
+            const isPlayable = !cell.isFree && cell.label !== "—" && playedNow.has(key);
+
+            return (
+              <button
+                key={i}
+                onClick={() => clickCell(i)}
+                className={`aspect-square rounded border overflow-hidden transition
+                  ${
+                    cell.isFree
+                      ? "bg-purple-700 border-purple-300"
+                      : isMarked
+                      ? "bg-lime-400 text-black border-lime-200"
+                      : isPlayable
+                      ? "bg-cyan-400/25 border-cyan-300 ring-2 ring-cyan-300/80 shadow-[0_0_22px_#22d3ee]"
+                      : "bg-black border-white/30"
+                  }`}
+              >
+                <div className="w-full h-full flex items-center justify-center p-1 text-center overflow-hidden">
+                  <span
+                    style={{
+                      fontSize: "clamp(6px,1.6vw,10px)",
+                      lineHeight: "1.05",
+                      maxHeight: "3.2em",
+                      overflow: "hidden",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {cell.label}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
     </main>

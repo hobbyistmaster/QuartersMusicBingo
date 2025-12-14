@@ -160,11 +160,7 @@ export default function GamePage() {
             {code}
           </div>
 
-          {/* ✅ Debug line (leave it for now) */}
-          <div className="mt-2 text-[10px] text-cyan-200 opacity-90">
-            revealed: {String(game.revealed)} | idx: {game.current_index} | playedNow:{" "}
-            {playedNow.size} | playable squares: {playableCount}
-          </div>
+          
         </div>
 
         {error && (

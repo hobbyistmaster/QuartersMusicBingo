@@ -102,6 +102,11 @@ export default function TvPage() {
                   {code}
                 </div>
               </div>
+
+              <div className="mt-3 text-center text-sm md:text-base tracking-wide text-cyan-300 opacity-90">
+  quartersbingo.netlify.app
+</div>
+
             </div>
 
             {/* Now Playing (70%) */}

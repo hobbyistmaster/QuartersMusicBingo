@@ -392,8 +392,14 @@ export default function HostPage() {
               <div className="text-xs opacity-80 mb-2">Now Playing</div>
 
               <div className="text-sm leading-snug break-words min-h-[2.5rem]">
-                {code ? (revealed ? gameLabels[currentStep] || "—" : "Hidden") : "—"}
-              </div>
+  {code ? (gameLabels[currentStep] || "—") : "—"}
+</div>
+
+<div className="mt-2 text-[10px] opacity-70">
+  TV Display: <span className="text-cyan-300">{revealed ? "REVEALED" : "HIDDEN"}</span>
+</div>
+
+
 
               <div className="mt-4 flex gap-2 flex-wrap">
                 <button

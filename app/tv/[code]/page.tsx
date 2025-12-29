@@ -3,15 +3,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { fetchGameByCode } from "../../lib/supabaseClient";
+import type { GameRow } from "../../lib/supabaseClient";
 
-type GameRow = {
-  code: string;
-  songs: string[]; // shuffled labels
-  current_index: number;
-  revealed: boolean;
-  pattern?: string | null;
-};
-
+// Song title only (strip artist if label is "Artist - Song")
 function songOnly(label: string) {
   const raw = (label || "").trim();
   const parts = raw.split(" - ");
@@ -23,83 +17,67 @@ export default function TvPage() {
   const params = useParams<{ code: string }>();
   const code = (params?.code || "").toString().toUpperCase();
 
-  const [connected, setConnected] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const [songs, setSongs] = useState<string[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [revealed, setRevealed] = useState(false);
-
-  // This is the key: we store played items as {n, title}
-  // where n = the original played order number (1-based).
-  const playedItems = useMemo(() => {
-    if (!songs || songs.length === 0) return [];
-    const maxPlayed = Math.min(currentIndex + (revealed ? 1 : 0), songs.length);
-    // songs[0]..songs[maxPlayed-1] are "played/revealed" in order
-    const arr = Array.from({ length: maxPlayed }, (_, i) => ({
-      n: i + 1, // original played order
-      title: songOnly(songs[i]),
-    }));
-    // Newest first for display
-    return arr.reverse();
-  }, [songs, currentIndex, revealed]);
-
-  const nowPlayingTitle = useMemo(() => {
-    if (!songs || songs.length === 0) return "Waiting for host…";
-    if (!revealed) return "Hidden";
-    return songOnly(songs[currentIndex] || "—");
-  }, [songs, currentIndex, revealed]);
+  const [game, setGame] = useState<GameRow | null>(null);
+  const [status, setStatus] = useState<string>("Loading...");
 
   useEffect(() => {
     if (!code) return;
 
     let alive = true;
 
-    const tick = async () => {
-      try {
-        const { data, error } = await fetchGameByCode(code);
-        if (!alive) return;
+    const load = async () => {
+      const { data, error } = await fetchGameByCode(code);
+      if (!alive) return;
 
-        if (error) {
-          setLoadError(error.message || "Failed to load game");
-          setConnected(false);
-          return;
-        }
-
-        if (!data) {
-          setLoadError("Game not found");
-          setConnected(false);
-          return;
-        }
-
-        const g = data as GameRow;
-
-        setSongs(Array.isArray(g.songs) ? g.songs : []);
-        setCurrentIndex(typeof g.current_index === "number" ? g.current_index : 0);
-        setRevealed(!!g.revealed);
-
-        setConnected(true);
-        setLoadError(null);
-      } catch (e: any) {
-        if (!alive) return;
-        setLoadError(e?.message || "Failed to load game");
-        setConnected(false);
+      if (error) {
+        setStatus("Failed to load game.");
+        setGame(null);
+        return;
       }
+      if (!data) {
+        setStatus("Game not found.");
+        setGame(null);
+        return;
+      }
+
+      setStatus("");
+      setGame(data);
     };
 
-    // initial + interval
-    tick();
-    const id = setInterval(tick, 800);
-
+    load();
+    const id = setInterval(load, 1000);
     return () => {
       alive = false;
       clearInterval(id);
     };
   }, [code]);
 
+  const currentSong = useMemo(() => {
+    if (!game) return null;
+    const idx = game.current_index;
+    if (!game.revealed) return null;
+    if (idx < 0 || idx >= game.songs.length) return null;
+    return songOnly(game.songs[idx]);
+  }, [game]);
+
+  const playedList = useMemo(() => {
+    if (!game) return [];
+    const last = game.revealed ? game.current_index : game.current_index - 1;
+    if (last < 0) return [];
+    return game.songs.slice(0, last + 1).map(songOnly);
+  }, [game]);
+
+  if (!code) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-black text-white font-['Press_Start_2P']">
+        No code in URL.
+      </main>
+    );
+  }
+
   return (
     <main
-      className="min-h-screen p-8 text-white font-['Press_Start_2P']"
+      className="min-h-screen relative overflow-hidden text-white font-['Press_Start_2P']"
       style={{
         backgroundImage: "url(/logo.jpg)",
         backgroundSize: "cover",
@@ -107,74 +85,75 @@ export default function TvPage() {
         backgroundColor: "black",
       }}
     >
-      {/* overlay */}
-      <div className="min-h-screen bg-black/65 rounded-2xl p-8">
-        {/* top small URL */}
-        <div className="text-center text-sm md:text-base opacity-90 mb-6">
-          quartersbingo.netlify.app
-        </div>
+      <div className="absolute inset-0 bg-black/55" />
 
-        {/* MAIN LAYOUT: split screen */}
-        <div className="max-w-7xl mx-auto grid grid-cols-2 gap-8">
-          {/* LEFT HALF */}
-          <div className="flex flex-col gap-8">
-            {/* code + now playing in one row */}
-            <div className="grid grid-cols-10 gap-6">
-              {/* CODE 30% */}
-              <div className="col-span-3 bg-black/70 border-2 border-cyan-400/70 rounded-2xl p-6 shadow-[0_0_18px_#22d3ee]">
-                <div className="text-center text-xs md:text-sm mb-3 opacity-90">
-                  SHOW THIS CODE TO JOIN
-                </div>
-                <div className="text-center text-5xl md:text-6xl tracking-[0.45em]">
+      <div className="relative z-10 min-h-screen p-6">
+        {/* 50/50 split */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-[calc(100vh-3rem)]">
+          {/* LEFT HALF: 30% CODE / 70% NOW PLAYING */}
+          <div className="grid grid-rows-[3fr_7fr] gap-6">
+            {/* Code (30%) */}
+            <div className="bg-black/70 border-2 border-cyan-400/70 rounded-2xl p-5 shadow-[0_0_28px_rgba(34,211,238,0.35)] flex flex-col justify-center">
+              <div className="text-center text-[10px] opacity-75 mb-2">
+                SHOW THIS CODE TO JOIN
+              </div>
+              <div className="flex justify-center">
+                <div className="text-5xl md:text-6xl tracking-[0.55em] bg-black/80 px-8 py-5 rounded-2xl border-2 border-cyan-400 shadow-[0_0_22px_#22d3ee]">
                   {code}
                 </div>
               </div>
 
-              {/* NOW PLAYING 70% */}
-              <div className="col-span-7 bg-black/70 border-2 border-fuchsia-400/70 rounded-2xl p-6 shadow-[0_0_18px_#d946ef]">
-                <div className="text-center text-lg md:text-xl mb-3">NOW PLAYING</div>
-                <div className="text-center text-3xl md:text-4xl leading-snug break-words">
-                  {nowPlayingTitle}
-                </div>
-                {!connected && (
-                  <div className="text-center text-xs opacity-70 mt-3">
-                    Waiting for host…
-                  </div>
-                )}
-              </div>
+              <div className="mt-3 text-center text-2xl md:text-3xl tracking-wide text-cyan-300 opacity-95">
+  quartersbingo.netlify.app
+</div>
+
+
             </div>
 
-            {/* status / errors */}
-            {loadError && (
-              <div className="bg-black/70 border border-red-500/60 rounded-xl p-4 text-xs">
-                {loadError}
-              </div>
-            )}
+            {/* Now Playing (70%) */}
+            <div className="bg-black/70 border-2 border-fuchsia-400/70 rounded-2xl p-6 shadow-[0_0_28px_rgba(217,70,239,0.35)] flex flex-col justify-center">
+              <div className="text-center text-lg md:text-xl mb-4">NOW PLAYING</div>
+
+              {status && !game && (
+                <div className="text-center text-sm opacity-80">{status}</div>
+              )}
+
+              {game && !game.revealed && (
+                <div className="text-center text-base md:text-lg opacity-80">
+                  Song is hidden…
+                </div>
+              )}
+
+              {game && game.revealed && (
+                <div className="text-center text-2xl md:text-4xl leading-snug break-words px-2">
+                  {currentSong ?? "—"}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* RIGHT HALF: SONGS PLAYED */}
-          <div className="bg-black/70 border-2 border-cyan-400/70 rounded-2xl p-5 shadow-[0_0_18px_#22d3ee] flex flex-col">
+          {/* RIGHT HALF: SONGS PLAYED - 3 columns, row-wise 1-3 then 4-6 */}
+          <div className="bg-black/70 border-2 border-cyan-400/70 rounded-2xl p-5 shadow-[0_0_28px_rgba(34,211,238,0.35)] flex flex-col">
             <div className="text-center text-lg md:text-xl mb-3">SONGS PLAYED</div>
 
-            {!connected && (
-              <div className="text-center text-sm opacity-75">No connection yet…</div>
-            )}
-
-            {connected && playedItems.length === 0 && (
-              <div className="text-center text-sm opacity-75">No songs played yet.</div>
-            )}
-
-            {connected && playedItems.length > 0 && (
+            {playedList.length === 0 ? (
+              <div className="text-center text-sm opacity-75">
+                No songs played yet.
+              </div>
+            ) : (
               <ol className="flex-1 overflow-y-auto pr-2 grid grid-cols-3 gap-x-6 gap-y-2">
-                {playedItems.map((item) => (
+                {[...playedList].reverse().map((title, idx) => (
+
                   <li
-                    key={`${item.n}-${item.title}`}
+                    key={`${idx}-${title}`}
                     className="border-b border-white/10 pb-2"
                   >
-                    {/* Keep the original played number */}
-                    <div className="text-[10px] text-white/60 mb-1">{item.n}.</div>
+                    <div className="text-[10px] text-white/60 mb-1">
+                      {playedList.length - idx}.
+
+                    </div>
                     <div className="text-xs md:text-sm leading-snug break-words">
-                      {item.title}
+                      {title}
                     </div>
                   </li>
                 ))}

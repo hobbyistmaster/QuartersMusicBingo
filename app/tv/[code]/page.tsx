@@ -94,14 +94,37 @@ export default function TvPage() {
 
       {/* HARD split screen: 50% left / 50% right */}
       <div className="max-w-7xl mx-auto grid grid-cols-2 gap-6 items-start">
-        {/* LEFT HALF: 30/70 grid */}
-        <div className="grid grid-cols-10 gap-6 items-start min-w-0">
-          {/* CODE (30%) */}
-          <div className="col-span-3 min-w-0">
-            <div className="bg-black/70 border border-cyan-400/70 rounded-2xl p-4 shadow-[0_0_18px_#22d3ee]">
-              <div className="text-center text-xs mb-2 opacity-80">
-                SHOW THIS CODE TO JOIN
-              </div>
+        {/* LEFT HALF: stacked + bigger */}
+<div className="flex flex-col gap-6 min-w-0">
+  {/* CODE (bigger, full width of left half) */}
+  <div className="min-w-0">
+    <div className="bg-black/70 border border-cyan-400/70 rounded-2xl p-6 shadow-[0_0_22px_#22d3ee]">
+      <div className="text-center text-xs md:text-sm mb-3 opacity-80">
+        SHOW THIS CODE TO JOIN
+      </div>
+
+      <div className="text-center whitespace-nowrap overflow-hidden">
+        <span className="inline-block text-6xl md:text-7xl tracking-[0.35em]">
+          {code || "----"}
+        </span>
+      </div>
+    </div>
+  </div>
+
+  {/* NOW PLAYING (bigger, full width of left half) */}
+  <div className="min-w-0">
+    <div className="bg-black/70 border border-fuchsia-400/60 rounded-2xl p-8 shadow-[0_0_22px_#d946ef]">
+      <div className="text-center text-xs md:text-sm mb-4 opacity-80">
+        NOW PLAYING
+      </div>
+
+      <div className="text-center text-5xl md:text-6xl leading-snug break-words">
+        {nowPlayingText}
+      </div>
+    </div>
+  </div>
+</div>
+
 
               {/* Prevent code from pushing layout wider */}
               <div className="text-center whitespace-nowrap overflow-hidden">
@@ -110,7 +133,7 @@ export default function TvPage() {
                 </span>
               </div>
             </div>
-          </div>
+          
 
           {/* NOW PLAYING (70%) */}
           <div className="col-span-7 min-w-0">
@@ -121,7 +144,7 @@ export default function TvPage() {
               </div>
             </div>
           </div>
-        </div>
+        
 
         {/* RIGHT HALF: Songs played */}
         <div className="min-w-0">
@@ -161,7 +184,7 @@ export default function TvPage() {
             )}
           </div>
         </div>
-      </div>
+      
     </main>
   );
 }

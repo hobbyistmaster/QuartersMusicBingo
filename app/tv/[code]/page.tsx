@@ -96,17 +96,23 @@ export default function TvPage() {
         {/* LEFT: stacked, bigger */}
         <div className="flex flex-col gap-6 min-w-0">
           {/* CODE BOX */}
-          <div className="bg-black/70 border border-cyan-400/70 rounded-2xl p-6 shadow-[0_0_22px_#22d3ee]">
-            <div className="text-center text-xs md:text-sm mb-3 opacity-80">
-              SHOW THIS CODE TO JOIN
-            </div>
+<div className="bg-black/70 border border-cyan-400/70 rounded-2xl p-8 md:p-10 shadow-[0_0_28px_#22d3ee]">
+  <div className="text-center text-sm md:text-base mb-4 opacity-90 tracking-wider">
+    CODE TO JOIN
+  </div>
 
-            <div className="text-center whitespace-nowrap overflow-hidden">
-              <span className="inline-block text-6xl md:text-7xl tracking-[0.30em]">
-                {code || "----"}
-              </span>
-            </div>
-          </div>
+  <div className="text-center whitespace-nowrap overflow-hidden">
+    <span className="inline-block text-7xl md:text-8xl tracking-[0.35em]">
+      {code || "----"}
+    </span>
+  </div>
+
+  {/* WEB ADDRESS */}
+  <div className="text-center mt-5 text-cyan-200 text-sm md:text-base tracking-wider drop-shadow-[0_0_10px_#22d3ee]">
+    quartersbingo.netlify.app
+  </div>
+</div>
+
 
           {/* NOW PLAYING BOX */}
           <div className="bg-black/70 border border-fuchsia-400/60 rounded-2xl p-8 shadow-[0_0_22px_#d946ef]">

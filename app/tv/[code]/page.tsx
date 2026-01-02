@@ -22,7 +22,7 @@ export default function TvPage() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
 
-  // Poll Supabase for game state (TV is read-only)
+  // Poll game state from Supabase
   useEffect(() => {
     let alive = true;
 
@@ -62,8 +62,7 @@ export default function TvPage() {
     };
   }, [code]);
 
-  // Songs that have been played so far:
-  // If revealed=true, include current song; otherwise, only those before it.
+  // Played songs (include current only if revealed)
   const playedList = useMemo(() => {
     if (!songs.length) return [];
     const end = revealed ? currentIndex + 1 : currentIndex;
@@ -73,8 +72,8 @@ export default function TvPage() {
   // Newest first, but keep original play numbers
   const playedNewestFirst = useMemo(() => {
     return playedList
-      .map((title, idx) => ({ title, playNumber: idx + 1 })) // original play order #
-      .reverse(); // newest first
+      .map((title, idx) => ({ title, playNumber: idx + 1 }))
+      .reverse();
   }, [playedList]);
 
   const nowPlayingText = useMemo(() => {
@@ -85,71 +84,48 @@ export default function TvPage() {
 
   return (
     <main className="min-h-screen w-full bg-black text-white font-['Press_Start_2P'] p-6">
-      {/* Top address (bigger) */}
-      <div className="text-center mb-4">
+      {/* TOP WEB ADDRESS */}
+      <div className="text-center mb-6">
         <div className="text-2xl md:text-3xl tracking-wider opacity-90">
           quartersbingo.netlify.app
         </div>
       </div>
 
-      {/* HARD split screen: 50% left / 50% right */}
-      <div className="max-w-7xl mx-auto grid grid-cols-2 gap-6 items-start">
-        {/* LEFT HALF: stacked + bigger */}
-<div className="flex flex-col gap-6 min-w-0">
-  {/* CODE (bigger, full width of left half) */}
-  <div className="min-w-0">
-    <div className="bg-black/70 border border-cyan-400/70 rounded-2xl p-6 shadow-[0_0_22px_#22d3ee]">
-      <div className="text-center text-xs md:text-sm mb-3 opacity-80">
-        SHOW THIS CODE TO JOIN
-      </div>
-
-      <div className="text-center whitespace-nowrap overflow-hidden">
-        <span className="inline-block text-6xl md:text-7xl tracking-[0.35em]">
-          {code || "----"}
-        </span>
-      </div>
-    </div>
-  </div>
-
-  {/* NOW PLAYING (bigger, full width of left half) */}
-  <div className="min-w-0">
-    <div className="bg-black/70 border border-fuchsia-400/60 rounded-2xl p-8 shadow-[0_0_22px_#d946ef]">
-      <div className="text-center text-xs md:text-sm mb-4 opacity-80">
-        NOW PLAYING
-      </div>
-
-      <div className="text-center text-5xl md:text-6xl leading-snug break-words">
-        {nowPlayingText}
-      </div>
-    </div>
-  </div>
-</div>
-
-
-              {/* Prevent code from pushing layout wider */}
-              <div className="text-center whitespace-nowrap overflow-hidden">
-                <span className="inline-block text-5xl md:text-6xl tracking-[0.35em]">
-                  {code || "----"}
-                </span>
-              </div>
+      {/* MAIN SPLIT: 50% LEFT / 50% RIGHT */}
+      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        {/* LEFT: stacked, bigger */}
+        <div className="flex flex-col gap-6 min-w-0">
+          {/* CODE BOX */}
+          <div className="bg-black/70 border border-cyan-400/70 rounded-2xl p-6 shadow-[0_0_22px_#22d3ee]">
+            <div className="text-center text-xs md:text-sm mb-3 opacity-80">
+              SHOW THIS CODE TO JOIN
             </div>
-          
 
-          {/* NOW PLAYING (70%) */}
-          <div className="col-span-7 min-w-0">
-            <div className="bg-black/70 border border-fuchsia-400/60 rounded-2xl p-4 shadow-[0_0_18px_#d946ef]">
-              <div className="text-center text-xs mb-3 opacity-80">NOW PLAYING</div>
-              <div className="text-center text-4xl md:text-5xl leading-snug break-words">
-                {nowPlayingText}
-              </div>
+            <div className="text-center whitespace-nowrap overflow-hidden">
+              <span className="inline-block text-6xl md:text-7xl tracking-[0.30em]">
+                {code || "----"}
+              </span>
             </div>
           </div>
-        
 
-        {/* RIGHT HALF: Songs played */}
+          {/* NOW PLAYING BOX */}
+          <div className="bg-black/70 border border-fuchsia-400/60 rounded-2xl p-8 shadow-[0_0_22px_#d946ef]">
+            <div className="text-center text-xs md:text-sm mb-4 opacity-80">
+              NOW PLAYING
+            </div>
+
+            <div className="text-center text-5xl md:text-6xl leading-snug break-words">
+              {nowPlayingText}
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT: songs played */}
         <div className="min-w-0">
-          <div className="bg-black/70 border border-cyan-400/70 rounded-2xl p-4 shadow-[0_0_18px_#22d3ee] min-h-[360px] flex flex-col">
-            <div className="text-center text-lg md:text-xl mb-3">SONGS PLAYED</div>
+          <div className="bg-black/70 border border-cyan-400/70 rounded-2xl p-6 shadow-[0_0_22px_#22d3ee] min-h-[420px] flex flex-col">
+            <div className="text-center text-lg md:text-xl mb-4">
+              SONGS PLAYED
+            </div>
 
             {!connected && (
               <div className="text-center text-sm opacity-75">
@@ -162,11 +138,13 @@ export default function TvPage() {
             )}
 
             {connected && !errorMsg && playedNewestFirst.length === 0 && (
-              <div className="text-center text-sm opacity-75">No songs played yet.</div>
+              <div className="text-center text-sm opacity-75">
+                No songs played yet.
+              </div>
             )}
 
             {connected && !errorMsg && playedNewestFirst.length > 0 && (
-              <ol className="min-w-0 flex-1 overflow-y-auto pr-2 grid grid-cols-3 gap-x-6 gap-y-2">
+              <ol className="min-w-0 flex-1 overflow-y-auto pr-2 grid grid-cols-3 gap-x-8 gap-y-3">
                 {playedNewestFirst.map(({ title, playNumber }) => (
                   <li
                     key={`${playNumber}-${title}`}
@@ -184,7 +162,7 @@ export default function TvPage() {
             )}
           </div>
         </div>
-      
+      </div>
     </main>
   );
 }

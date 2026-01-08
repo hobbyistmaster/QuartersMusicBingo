@@ -1,36 +1,137 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { shuffleArray } from "../lib/shuffle";
-import { upsertGame, updateGameState } from "../lib/supabaseClient";
+import { useRouter } from "next/navigation";
 
-type Pattern =
-  | "regular"
-  | "l"
-  | "t"
-  | "corners"
-  | "x"
-  | "z"
-  | "n"
-  | "outside"
-  | "plus"
-  | "diamond"
-  | "full";
+/** ---------- helpers ---------- */
+function randomCode4Letters() {
+  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ"; // avoid I/O
+  let out = "";
+  for (let i = 0; i < 4; i++) out += letters[Math.floor(Math.random() * letters.length)];
+  return out;
+}
 
-const THEME_OPTIONS = [
-  "60s",
-  "70s",
-  "80s",
-  "90s",
-  "2000s",
-  "Classic Rock",
-  "Pop/R&B",
-  "Alternative",
-  "Rock",
-  "Country",
+function shuffleArray<T>(arr: T[]) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function stripExtension(name: string) {
+  return name.replace(/\.[^/.]+$/, "");
+}
+
+function cleanPiece(s: string) {
+  return stripExtension(s)
+    .replace(/[_]+/g, " ")
+    .replace(/[.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Tries: "Artist - Song", "Artist — Song", "Artist – Song"
+function parseArtistTitle(filenameOrTitle: string): { title: string; artist: string } {
+  const s = cleanPiece(filenameOrTitle);
+  const parts = s.split(/\s[-–—]\s/); // space-dash-space
+  if (parts.length >= 2) {
+    const artist = parts[0].trim();
+    const title = parts.slice(1).join(" - ").trim();
+    return { title: title || s, artist };
+  }
+  return { title: s, artist: "" };
+}
+
+function supabaseHeaders() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !key) {
+    return { url: "", key: "", ok: false as const };
+  }
+  return { url, key, ok: true as const };
+}
+
+async function upsertGame(payload: {
+  code: string;
+  songs: string[];
+  current_index: number;
+  revealed: boolean;
+  pattern: string;
+}) {
+  const { url, key, ok } = supabaseHeaders();
+  if (!ok) {
+    return { error: { message: "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY" } as any };
+  }
+
+  const endpoint = `${url}/rest/v1/games?on_conflict=code`;
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates,return=representation",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = await res.json();
+      msg = j?.message || msg;
+    } catch {}
+    return { error: { message: msg } as any };
+  }
+
+  return { error: null as any };
+}
+
+async function updateGameState(code: string, current_index: number, revealed: boolean) {
+  const { url, key, ok } = supabaseHeaders();
+  if (!ok) {
+    return { error: { message: "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY" } as any };
+  }
+
+  const endpoint = `${url}/rest/v1/games?code=eq.${encodeURIComponent(code)}`;
+
+  const res = await fetch(endpoint, {
+    method: "PATCH",
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify({ current_index, revealed }),
+  });
+
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = await res.json();
+      msg = j?.message || msg;
+    } catch {}
+    return { error: { message: msg } as any };
+  }
+
+  return { error: null as any };
+}
+
+/** ---------- UI data ---------- */
+const THEMES = [
+  "60's",
+  "70's",
+  "80's",
+  "90's",
+  "2000's",
   "Girl Power",
   "Soundtracks & Themes",
-  "One Hit Wonders",
+  "1 Hit Wonders",
   "#1 Hits",
   "Animals",
   "Food & Drink",
@@ -38,414 +139,406 @@ const THEME_OPTIONS = [
   "Love",
   "Dance",
   "Holiday/Seasonal",
+  "Classic Rock",
+  "Pop/R&B",
+  "Alternative",
+  "Rock",
+  "Country",
 ] as const;
 
-function makeCode(len = 4) {
-  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  let out = "";
-  for (let i = 0; i < len; i++) out += letters[Math.floor(Math.random() * letters.length)];
-  return out;
-}
-
-// "Artist - Song" => "Song"
-function songOnly(label: string) {
-  const raw = (label || "").trim();
-  const parts = raw.split(" - ");
-  const out = parts.length > 1 ? parts.slice(1).join(" - ") : raw;
-  return out.replace(/\s+/g, " ").trim();
-}
+const PATTERNS = [
+  { key: "regular", label: "Regular (Row/Col/Diag)" },
+  { key: "four_corners", label: "4 Corners" },
+  { key: "outside", label: "Outside Square" },
+  { key: "l", label: "L" },
+  { key: "t", label: "T" },
+  { key: "x", label: "X" },
+  { key: "z", label: "Z" },
+  { key: "n", label: "N" },
+  { key: "coverall", label: "Cover All" },
+] as const;
 
 export default function HostPage() {
-  /* ================= PIN ================= */
-  const HOST_PIN = process.env.NEXT_PUBLIC_HOST_PIN || "";
-  const [authorized, setAuthorized] = useState(false);
-  const [pinInput, setPinInput] = useState("");
+  const router = useRouter();
 
-  /* ================= SETUP ================= */
-  const [selectedTheme, setSelectedTheme] =
-    useState<(typeof THEME_OPTIONS)[number]>("80s");
+  // setup
+  const [selectedTheme, setSelectedTheme] = useState<(typeof THEMES)[number]>("80's");
+  const [pattern, setPattern] = useState<(typeof PATTERNS)[number]["key"]>("regular");
 
-  const [pattern, setPattern] = useState<Pattern>("regular");
+  // files + labels
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [playLabels, setPlayLabels] = useState<string[]>([]); // title only
+  const [playArtists, setPlayArtists] = useState<string[]>([]); // artist aligned with playLabels
 
-  const [audioFiles, setAudioFiles] = useState<File[]>([]);
+  // game + playback state
+  const [code, setCode] = useState<string>("");
+  const [started, setStarted] = useState(false);
 
-  // base = original file order (never changes until you load new songs)
-  const [baseUrls, setBaseUrls] = useState<string[]>([]);
-  const [baseLabels, setBaseLabels] = useState<string[]>([]);
+  // current index (0-based)
+  const [currentIndex, setCurrentIndex] = useState(0);
 
-  // game = shuffled order used for THIS game (host audio + tv + cards)
-  const [gameUrls, setGameUrls] = useState<string[]>([]);
-  const [gameLabels, setGameLabels] = useState<string[]>([]);
-
-  /* ================= GAME STATE ================= */
-  const [code, setCode] = useState("");
-  const [showCode, setShowCode] = useState(false);
-  const [currentStep, setCurrentStep] = useState(0);
+  // reveal state (TV shows song title only when revealed)
   const [revealed, setRevealed] = useState(false);
+
+  // host sees song + artist
+  const nowTitle = playLabels[currentIndex] ?? "No song";
+  const nowArtist = playArtists[currentIndex] ?? "";
+
+  // audio
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // If true, when currentIndex changes we will auto-play (used by Next/Prev)
+  const shouldAutoplayNextRef = useRef(false);
 
-  const tvUrl = useMemo(() => (code ? `/tv/${code}` : ""), [code]);
+  // Build object URLs for playback (local files)
+  const fileUrls = useMemo(() => {
+    return files.map((f) => URL.createObjectURL(f));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files]);
 
-  /* ================= PIN SUBMIT ================= */
-  const submitPin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!HOST_PIN || pinInput.trim() === HOST_PIN.trim()) setAuthorized(true);
-    else alert("Wrong PIN");
-  };
-
-  /* ================= FILE LOAD ================= */
+  // cleanup urls
   useEffect(() => {
-    // revoke old object URLs
-    baseUrls.forEach((u) => URL.revokeObjectURL(u));
-    gameUrls.forEach((u) => URL.revokeObjectURL(u)); // in case old game URLs existed too
+    return () => {
+      fileUrls.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [fileUrls]);
 
-    const urls = audioFiles.map((f) => URL.createObjectURL(f));
-    const labels = audioFiles.map((f) => songOnly(f.name.replace(/\.[^/.]+$/, "")));
+  /** load songs */
+  const handlePickSongs = () => fileInputRef.current?.click();
 
-    setBaseUrls(urls);
-    setBaseLabels(labels);
+  const handleFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const list = Array.from(e.target.files ?? []);
+    if (list.length === 0) return;
 
-    // reset current game lists to match base until you hit START GAME
-    setGameUrls(urls);
-    setGameLabels(labels);
+    const parsed = list.map((f) => {
+      const { title, artist } = parseArtistTitle(f.name);
+      return { file: f, title, artist };
+    });
 
-    // reset playback
-    setCurrentStep(0);
+    setFiles(parsed.map((x) => x.file));
+    setPlayLabels(parsed.map((x) => x.title));
+    setPlayArtists(parsed.map((x) => x.artist));
+
+    // reset
+    setCurrentIndex(0);
     setRevealed(false);
+    setStarted(false);
+    setCode("");
     setIsPlaying(false);
 
+    shouldAutoplayNextRef.current = false;
+
+    // reset audio
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
-      audioRef.current.src = urls[0] || "";
+      audioRef.current.src = "";
     }
+  };
 
-    return () => {
-      // no-op; we already revoke on next load
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioFiles]);
-
-  /* ================= AUDIO SYNC ================= */
-  useEffect(() => {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    audioRef.current.currentTime = 0;
-    audioRef.current.src = gameUrls[currentStep] || "";
-    setIsPlaying(false); // stay paused until you press PLAY
-  }, [gameUrls, currentStep]);
-
-  /* ================= START GAME (SYNC SHUFFLE) ================= */
-  const startGame = async () => {
-    if (baseLabels.length === 0 || baseUrls.length === 0) {
-      alert("Click ADD SONGS and choose your music files first.");
+  /** start game: shuffle labels ONCE and write to Supabase */
+  const handleStartGame = async () => {
+    if (playLabels.length < 1) {
+      alert("Add songs first.");
       return;
     }
 
-    const newCode = makeCode(4);
+    const newCode = randomCode4Letters();
+    const shuffledTitles = shuffleArray(playLabels);
+
     setCode(newCode);
-    setShowCode(false);
-
-    // Build a shuffled order index list, then apply it to BOTH labels and urls
-    const order = shuffleArray(Array.from({ length: baseLabels.length }, (_, i) => i));
-    const shuffledLabels = order.map((i) => baseLabels[i]);
-    const shuffledUrls = order.map((i) => baseUrls[i]);
-
-    // Host now uses the SAME shuffled list as Supabase/TV/Cards
-    setGameLabels(shuffledLabels);
-    setGameUrls(shuffledUrls);
-    setCurrentStep(0);
+    setStarted(true);
     setRevealed(false);
-    setIsPlaying(false);
+    setCurrentIndex(0);
 
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current.src = shuffledUrls[0] || "";
-    }
+    // do not autoplay on start (only Next/Prev should)
+    shouldAutoplayNextRef.current = false;
 
-    // Save to Supabase so TV + phones can see it
+    // Write initial game row to Supabase
     const { error } = await upsertGame({
       code: newCode,
-      songs: shuffledLabels,      // ✅ this list matches host playback now
+      songs: shuffledTitles,
       current_index: 0,
       revealed: false,
-      pattern,                   // ✅ saved once at game start
+      pattern: pattern,
     });
 
     if (error) {
-      console.error("Supabase upsert error:", error);
       alert("Failed to save game to Supabase: " + error.message);
-      return;
+      console.error(error);
+    } else {
+      console.log("Game saved:", newCode);
     }
   };
 
-  /* ================= LIVE UPDATE ================= */
+  /** keep supabase synced when host changes index/reveal AFTER start */
   useEffect(() => {
+    if (!started) return;
     if (!code) return;
 
     const doUpdate = async () => {
-      const { error } = await updateGameState(code, currentStep, revealed);
-      if (error) console.error("Supabase update error:", error);
+      const { error } = await updateGameState(code, currentIndex, revealed);
+      if (error) console.error("Supabase update error:", error.message);
     };
 
     doUpdate();
-  }, [code, currentStep, revealed]);
+  }, [started, code, currentIndex, revealed]);
 
-  /* ================= CONTROLS ================= */
-  const playPause = async () => {
-    const a = audioRef.current;
-    if (!a) return;
+  /** audio core helpers */
+  const loadCurrentIntoAudio = () => {
+    if (!audioRef.current) return false;
+    if (!files[currentIndex]) return false;
 
-    if (a.paused) {
-      try {
-        await a.play();
-        setIsPlaying(true);
-      } catch {
-        setIsPlaying(false);
-      }
-    } else {
-      a.pause();
+    const url = fileUrls[currentIndex];
+    audioRef.current.src = url;
+    audioRef.current.currentTime = 0;
+    return true;
+  };
+
+  const playAudio = async () => {
+    if (!audioRef.current) return;
+    try {
+      await audioRef.current.play();
+      setIsPlaying(true);
+    } catch (e) {
+      console.error(e);
       setIsPlaying(false);
+      alert("Browser blocked autoplay. Click PLAY/RESUME once, then Next will auto-play.");
     }
   };
 
-  const prevSong = () => {
-    setRevealed(false);
-    setIsPlaying(false);
-    setCurrentStep((s) => Math.max(0, s - 1));
+  // When index changes, load file; if Next/Prev requested autoplay, play it.
+  useEffect(() => {
+    if (!files.length) return;
+    const ok = loadCurrentIntoAudio();
+    if (!ok) return;
+
+    // Autoplay only when Next/Prev set the flag
+    if (shouldAutoplayNextRef.current) {
+      shouldAutoplayNextRef.current = false;
+      playAudio();
+    } else {
+      setIsPlaying(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIndex, files.length]);
+
+  /** controls */
+  const handlePlayResume = async () => {
+    if (!audioRef.current) return;
+    if (!audioRef.current.src) loadCurrentIntoAudio();
+    await playAudio();
   };
 
-  const nextSong = () => {
-    setRevealed(false);
+  const handlePause = () => {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
     setIsPlaying(false);
-    setCurrentStep((s) => Math.min(s + 1, Math.max(0, gameUrls.length - 1)));
   };
 
-  /* ================= UI ================= */
-  if (!authorized) {
-    return (
-      <main className="min-h-screen flex items-center justify-center bg-black text-white font-['Press_Start_2P'] p-6">
-        <form
-          onSubmit={submitPin}
-          className="w-full max-w-sm bg-black/70 border border-cyan-400/60 rounded-2xl p-6"
-        >
-          <h1 className="text-xl text-center mb-4">HOST LOGIN</h1>
+  const stopAndResetAudio = () => {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
+    audioRef.current.currentTime = 0;
+  };
 
-          <input
-            value={pinInput}
-            onChange={(e) => setPinInput(e.target.value)}
-            className="w-full bg-black border border-white/30 rounded-lg p-3 text-white text-center"
-            placeholder="Enter PIN"
-          />
+  // ✅ NEXT/PREV should auto-play
+  const handlePrev = () => {
+    setRevealed(false);
+    stopAndResetAudio();
+    setIsPlaying(false);
 
-          <button className="w-full mt-4 border-2 border-cyan-400 rounded-lg py-3 hover:bg-cyan-400/10">
-            ENTER
-          </button>
+    shouldAutoplayNextRef.current = true;
+    setCurrentIndex((i) => Math.max(0, i - 1));
+  };
 
-          {!HOST_PIN && (
-            <div className="mt-3 text-[10px] opacity-70 text-center">
-              (NEXT_PUBLIC_HOST_PIN not set — allowing access)
-            </div>
-          )}
-        </form>
-      </main>
-    );
-  }
+  const handleNext = () => {
+    setRevealed(false);
+    stopAndResetAudio();
+    setIsPlaying(false);
+
+    shouldAutoplayNextRef.current = true;
+    setCurrentIndex((i) => Math.min(playLabels.length - 1, i + 1));
+  };
+
+  const handleRevealToggle = () => setRevealed((r) => !r);
+
+  const openTv = () => {
+    if (!code) {
+      alert("Start game first.");
+      return;
+    }
+    window.open(`/tv/${code}`, "_blank", "noopener,noreferrer");
+  };
 
   return (
     <main
-      className="min-h-screen p-6 text-white font-['Press_Start_2P']"
+      className="min-h-screen w-full text-white font-['Press_Start_2P']"
       style={{
         backgroundImage: "url(/logo.jpg)",
         backgroundSize: "cover",
         backgroundPosition: "center",
-        backgroundColor: "black",
+        backgroundRepeat: "no-repeat",
       }}
     >
-      <div className="min-h-screen bg-black/60 p-6 rounded-2xl">
-        <div className="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* LEFT: Setup */}
-          <section className="bg-black/70 border border-cyan-400/60 rounded-2xl p-5">
-            <h1 className="text-xl mb-4">HOST SETUP</h1>
+      <div className="min-h-screen w-full bg-black/30 backdrop-brightness-110">
+        <div className="max-w-6xl mx-auto px-4 py-8">
+          <div className="text-center mb-8">
+            <div className="text-3xl md:text-4xl tracking-wider drop-shadow-[0_0_18px_#ff00ff]">
+              HOST SETUP
+            </div>
+          </div>
 
-            {/* THEME (label only for now) */}
-            <div className="mb-4">
-              <label className="block text-xs mb-1 opacity-80">Theme</label>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+            {/* LEFT: setup */}
+            <div className="bg-black/55 border border-cyan-400/50 rounded-2xl p-6 shadow-[0_0_22px_#22d3ee]">
+              <div className="text-lg mb-4">Theme</div>
               <select
+                className="w-full bg-black/70 border border-white/20 rounded-xl px-4 py-3 text-sm"
                 value={selectedTheme}
                 onChange={(e) => setSelectedTheme(e.target.value as any)}
-                className="w-full bg-black/70 border border-cyan-400/50 rounded-lg p-3"
               >
-                {THEME_OPTIONS.map((t) => (
+                {THEMES.map((t) => (
                   <option key={t} value={t}>
                     {t}
                   </option>
                 ))}
               </select>
-              <div className="mt-2 text-[10px] opacity-70">
-                (Theme is just a label while you’re loading songs manually.)
+
+              <div className="text-[10px] opacity-70 mt-3">
+                (Theme is just a label while you&apos;re loading songs manually.)
+              </div>
+
+              <div className="text-lg mt-6 mb-4">Win Pattern</div>
+              <select
+                className="w-full bg-black/70 border border-white/20 rounded-xl px-4 py-3 text-sm"
+                value={pattern}
+                onChange={(e) => setPattern(e.target.value as any)}
+              >
+                {PATTERNS.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+
+              {/* hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*"
+                multiple
+                className="hidden"
+                onChange={handleFilesSelected}
+              />
+
+              <button
+                onClick={handlePickSongs}
+                className="mt-6 w-full py-4 rounded-2xl border border-cyan-300/60 bg-black/60 shadow-[0_0_18px_#22d3ee] hover:bg-black/70 transition"
+              >
+                ADD SONGS
+              </button>
+
+              <div className="text-xs opacity-80 mt-3">Loaded: {files.length} file(s)</div>
+
+              <button
+                onClick={handleStartGame}
+                className="mt-6 w-full py-4 rounded-2xl border border-lime-300/60 bg-black/60 shadow-[0_0_18px_#84cc16] hover:bg-black/70 transition"
+              >
+                START GAME
+              </button>
+
+              <div className="text-[10px] opacity-80 mt-4">
+                Tip: Keep &quot;SHOW CODE&quot; off while you&apos;re getting ready.
               </div>
             </div>
 
-            {/* WIN PATTERN */}
-            <div className="mb-4">
-              <label className="block text-xs mb-1 opacity-80">Win Pattern</label>
-              <select
-                value={pattern}
-                onChange={(e) => setPattern(e.target.value as Pattern)}
-                className="w-full bg-black/70 border border-cyan-400/50 rounded-lg p-3"
-              >
-                <option value="regular">Regular (Row/Col/Diag)</option>
-                <option value="l">L</option>
-                <option value="t">T</option>
-                <option value="corners">4 Corners</option>
-                <option value="x">X</option>
-                <option value="z">Z</option>
-                <option value="n">N</option>
-                <option value="outside">Outside Border</option>
-                <option value="plus">Plus (+)</option>
-                <option value="diamond">Diamond</option>
-                <option value="full">Cover All</option>
-              </select>
-            </div>
-
-            {/* ADD SONGS BUTTON + HIDDEN INPUT */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="audio/*"
-              onChange={(e) => setAudioFiles(Array.from(e.target.files || []))}
-              className="hidden"
-            />
-
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="w-full border-2 border-cyan-400 rounded-xl py-3 hover:bg-cyan-400/10"
-            >
-              ADD SONGS
-            </button>
-
-            <div className="mt-2 text-[10px] opacity-75">
-              Loaded: {audioFiles.length} file(s)
-            </div>
-
-            <button
-              onClick={startGame}
-              className="w-full mt-4 border-2 border-lime-400 rounded-xl py-3 hover:bg-lime-400/10"
-            >
-              START GAME
-            </button>
-
-            <div className="mt-4 text-[10px] opacity-70">
-              Tip: Keep “SHOW CODE” off while you’re getting ready.
-            </div>
-          </section>
-
-          {/* RIGHT: Live Control */}
-          <section className="bg-black/70 border border-fuchsia-400/60 rounded-2xl p-5">
-            <h2 className="text-lg mb-4">GAME CONTROL</h2>
-
-            {!code ? (
-              <div className="text-sm opacity-70">Start a game to generate a code.</div>
-            ) : (
-              <>
-                <div className="flex gap-2 flex-wrap items-center mb-3">
-                  <button
-                    onClick={() => setShowCode((v) => !v)}
-                    className="border border-cyan-400/60 rounded-lg px-4 py-2 hover:bg-cyan-400/10"
-                  >
-                    {showCode ? "HIDE CODE" : "SHOW CODE"}
-                  </button>
-
-                  <button
-                    onClick={() => window.open(tvUrl, "_blank", "noopener,noreferrer")}
-                    className="border border-white/30 rounded-lg px-4 py-2 hover:bg-white/10"
-                    disabled={!tvUrl}
-                  >
-                    OPEN TV
-                  </button>
+            {/* RIGHT: controls */}
+            <div className="bg-black/55 border border-fuchsia-400/40 rounded-2xl p-6 shadow-[0_0_22px_#ff00ff]">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="text-sm opacity-90">
+                  Game Code:{" "}
+                  <span className="text-cyan-200 drop-shadow-[0_0_10px_#22d3ee]">
+                    {code || "----"}
+                  </span>
                 </div>
 
-                {showCode && (
-                  <div className="mb-4">
-                    <div className="text-xs opacity-80 mb-2">Show this on the TV</div>
-                    <div className="text-6xl tracking-[0.45em] bg-black/80 border-2 border-cyan-400 rounded-2xl px-6 py-4 inline-block shadow-[0_0_18px_#22d3ee]">
-                      {code}
-                    </div>
-                  </div>
-                )}
-
-                <div className="text-[10px] opacity-75 mb-4">
-                  Pattern: <span className="text-cyan-300">{pattern}</span> • Theme:{" "}
-                  <span className="text-cyan-300">{selectedTheme}</span>
-                </div>
-              </>
-            )}
-
-            {/* NOW PLAYING + CONTROLS */}
-            <div className="border border-white/10 rounded-xl p-4">
-              <div className="text-xs opacity-80 mb-2">Now Playing</div>
-
-              <div className="text-sm leading-snug break-words min-h-[2.5rem]">
-  {code ? (gameLabels[currentStep] || "—") : "—"}
-</div>
-
-<div className="mt-2 text-[10px] opacity-70">
-  TV Display: <span className="text-cyan-300">{revealed ? "REVEALED" : "HIDDEN"}</span>
-</div>
-
-
-
-              <div className="mt-4 flex gap-2 flex-wrap">
                 <button
-                  onClick={prevSong}
-                  className="border border-white/30 rounded-lg px-3 py-2 hover:bg-white/10"
-                  disabled={!code}
+                  onClick={openTv}
+                  className="px-4 py-2 rounded-xl border border-white/20 bg-black/60 hover:bg-black/70 transition text-xs"
+                >
+                  OPEN TV
+                </button>
+              </div>
+
+              <div className="mt-6">
+                <div className="text-xs opacity-80 mb-2">Host Now Playing</div>
+
+                <div className="bg-black/60 border border-white/10 rounded-2xl p-6">
+                  <div className="text-2xl md:text-3xl leading-snug break-words drop-shadow-[0_0_14px_#ffffff]">
+                    {nowTitle}
+                  </div>
+
+                  {!!nowArtist && (
+                    <div className="mt-4 text-sm md:text-base text-white/70 break-words">{nowArtist}</div>
+                  )}
+
+                  <div className="mt-4 text-[10px] opacity-70">
+                    Track {files.length ? currentIndex + 1 : 0} / {files.length}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 grid grid-cols-2 gap-3">
+                <button
+                  onClick={handlePrev}
+                  className="py-3 rounded-xl border border-white/20 bg-black/60 hover:bg-black/70 transition"
                 >
                   PREV
                 </button>
-
                 <button
-                  onClick={nextSong}
-                  className="border border-white/30 rounded-lg px-3 py-2 hover:bg-white/10"
-                  disabled={!code}
+                  onClick={handleNext}
+                  className="py-3 rounded-xl border border-white/20 bg-black/60 hover:bg-black/70 transition"
                 >
                   NEXT
                 </button>
 
                 <button
-                  onClick={playPause}
-                  className="border-2 border-cyan-400 rounded-lg px-3 py-2 hover:bg-cyan-400/10"
-                  disabled={!code || gameUrls.length === 0}
+                  onClick={handlePlayResume}
+                  className="py-3 rounded-xl border border-cyan-300/50 bg-black/60 shadow-[0_0_14px_#22d3ee] hover:bg-black/70 transition"
                 >
-                  {isPlaying ? "PAUSE" : "PLAY"}
+                  {isPlaying ? "PLAYING" : "PLAY / RESUME"}
+                </button>
+                <button
+                  onClick={handlePause}
+                  className="py-3 rounded-xl border border-white/20 bg-black/60 hover:bg-black/70 transition"
+                >
+                  PAUSE
                 </button>
 
                 <button
-                  onClick={() => setRevealed(true)}
-                  className="border-2 border-lime-400 rounded-lg px-3 py-2 hover:bg-lime-400/10"
-                  disabled={!code}
+                  onClick={handleRevealToggle}
+                  className="col-span-2 py-3 rounded-xl border border-fuchsia-300/50 bg-black/60 shadow-[0_0_14px_#ff00ff] hover:bg-black/70 transition"
                 >
-                  REVEAL
-                </button>
-
-                <button
-                  onClick={() => setRevealed(false)}
-                  className="border border-white/30 rounded-lg px-3 py-2 hover:bg-white/10"
-                  disabled={!code}
-                >
-                  HIDE
+                  {revealed ? "HIDE ON TV" : "REVEAL ON TV"}
                 </button>
               </div>
 
-              <audio ref={audioRef} />
+              <div className="mt-4 text-[10px] opacity-75">
+                Theme: {selectedTheme} • Pattern:{" "}
+                {PATTERNS.find((p) => p.key === pattern)?.label ?? pattern}
+              </div>
+
+              <audio
+                ref={audioRef}
+                onEnded={() => setIsPlaying(false)}
+                onPause={() => setIsPlaying(false)}
+                onPlay={() => setIsPlaying(true)}
+              />
             </div>
-          </section>
+          </div>
         </div>
       </div>
     </main>

@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 
 /** ---------- helpers ---------- */
 function randomCode4Letters() {
@@ -32,25 +31,28 @@ function cleanPiece(s: string) {
     .trim();
 }
 
-// Tries: "Artist - Song", "Artist — Song", "Artist – Song"
+// Handles: "Artist - Song", "Artist- Song", "Artist -Song", "Artist-Song"
+// Also handles en-dash/em-dash
 function parseArtistTitle(filenameOrTitle: string): { title: string; artist: string } {
   const s = cleanPiece(filenameOrTitle);
-  const parts = s.split(/\s[-–—]\s/); // space-dash-space
+
+  // split on dash types with optional spaces
+  const parts = s.split(/\s*[-–—]\s*/).filter(Boolean);
+
+  // Common case: Artist - Title
   if (parts.length >= 2) {
     const artist = parts[0].trim();
     const title = parts.slice(1).join(" - ").trim();
-    return { title: title || s, artist };
+    return { title: title || s, artist: artist || "" };
   }
+
   return { title: s, artist: "" };
 }
 
 function supabaseHeaders() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !key) {
-    return { url: "", key: "", ok: false as const };
-  }
+  if (!url || !key) return { url: "", key: "", ok: false as const };
   return { url, key, ok: true as const };
 }
 
@@ -62,9 +64,7 @@ async function upsertGame(payload: {
   pattern: string;
 }) {
   const { url, key, ok } = supabaseHeaders();
-  if (!ok) {
-    return { error: { message: "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY" } as any };
-  }
+  if (!ok) return { error: { message: "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY" } as any };
 
   const endpoint = `${url}/rest/v1/games?on_conflict=code`;
 
@@ -87,15 +87,12 @@ async function upsertGame(payload: {
     } catch {}
     return { error: { message: msg } as any };
   }
-
   return { error: null as any };
 }
 
 async function updateGameState(code: string, current_index: number, revealed: boolean) {
   const { url, key, ok } = supabaseHeaders();
-  if (!ok) {
-    return { error: { message: "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY" } as any };
-  }
+  if (!ok) return { error: { message: "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY" } as any };
 
   const endpoint = `${url}/rest/v1/games?code=eq.${encodeURIComponent(code)}`;
 
@@ -118,7 +115,6 @@ async function updateGameState(code: string, current_index: number, revealed: bo
     } catch {}
     return { error: { message: msg } as any };
   }
-
   return { error: null as any };
 }
 
@@ -158,45 +154,39 @@ const PATTERNS = [
   { key: "coverall", label: "Cover All" },
 ] as const;
 
-export default function HostPage() {
-  const router = useRouter();
+type SongItem = {
+  file: File;
+  title: string;
+  artist: string;
+};
 
+export default function HostPage() {
   // setup
   const [selectedTheme, setSelectedTheme] = useState<(typeof THEMES)[number]>("80's");
   const [pattern, setPattern] = useState<(typeof PATTERNS)[number]["key"]>("regular");
 
-  // files + labels
+  // songs (file + title + artist kept together)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [files, setFiles] = useState<File[]>([]);
-  const [playLabels, setPlayLabels] = useState<string[]>([]); // title only
-  const [playArtists, setPlayArtists] = useState<string[]>([]); // artist aligned with playLabels
+  const [songItems, setSongItems] = useState<SongItem[]>([]);
 
-  // game + playback state
+  // game state
   const [code, setCode] = useState<string>("");
   const [started, setStarted] = useState(false);
-
-  // current index (0-based)
   const [currentIndex, setCurrentIndex] = useState(0);
-
-  // reveal state (TV shows song title only when revealed)
   const [revealed, setRevealed] = useState(false);
-
-  // host sees song + artist
-  const nowTitle = playLabels[currentIndex] ?? "No song";
-  const nowArtist = playArtists[currentIndex] ?? "";
 
   // audio
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
-  // If true, when currentIndex changes we will auto-play (used by Next/Prev)
+  // Next/Prev should autoplay
   const shouldAutoplayNextRef = useRef(false);
 
-  // Build object URLs for playback (local files)
+  // object URLs for current song order (this matches TV order now)
   const fileUrls = useMemo(() => {
-    return files.map((f) => URL.createObjectURL(f));
+    return songItems.map((s) => URL.createObjectURL(s.file));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files]);
+  }, [songItems]);
 
   // cleanup urls
   useEffect(() => {
@@ -205,32 +195,30 @@ export default function HostPage() {
     };
   }, [fileUrls]);
 
-  /** load songs */
+  const count = songItems.length;
+  const nowTitle = songItems[currentIndex]?.title ?? "No song";
+  const nowArtist = songItems[currentIndex]?.artist ?? "";
+
+  /** ---------- file loading ---------- */
   const handlePickSongs = () => fileInputRef.current?.click();
 
   const handleFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const list = Array.from(e.target.files ?? []);
-    if (list.length === 0) return;
+    if (!list.length) return;
 
-    const parsed = list.map((f) => {
+    const parsed: SongItem[] = list.map((f) => {
       const { title, artist } = parseArtistTitle(f.name);
       return { file: f, title, artist };
     });
 
-    setFiles(parsed.map((x) => x.file));
-    setPlayLabels(parsed.map((x) => x.title));
-    setPlayArtists(parsed.map((x) => x.artist));
-
-    // reset
+    setSongItems(parsed);
     setCurrentIndex(0);
     setRevealed(false);
     setStarted(false);
     setCode("");
     setIsPlaying(false);
-
     shouldAutoplayNextRef.current = false;
 
-    // reset audio
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -238,59 +226,10 @@ export default function HostPage() {
     }
   };
 
-  /** start game: shuffle labels ONCE and write to Supabase */
-  const handleStartGame = async () => {
-    if (playLabels.length < 1) {
-      alert("Add songs first.");
-      return;
-    }
-
-    const newCode = randomCode4Letters();
-    const shuffledTitles = shuffleArray(playLabels);
-
-    setCode(newCode);
-    setStarted(true);
-    setRevealed(false);
-    setCurrentIndex(0);
-
-    // do not autoplay on start (only Next/Prev should)
-    shouldAutoplayNextRef.current = false;
-
-    // Write initial game row to Supabase
-    const { error } = await upsertGame({
-      code: newCode,
-      songs: shuffledTitles,
-      current_index: 0,
-      revealed: false,
-      pattern: pattern,
-    });
-
-    if (error) {
-      alert("Failed to save game to Supabase: " + error.message);
-      console.error(error);
-    } else {
-      console.log("Game saved:", newCode);
-    }
-  };
-
-  /** keep supabase synced when host changes index/reveal AFTER start */
-  useEffect(() => {
-    if (!started) return;
-    if (!code) return;
-
-    const doUpdate = async () => {
-      const { error } = await updateGameState(code, currentIndex, revealed);
-      if (error) console.error("Supabase update error:", error.message);
-    };
-
-    doUpdate();
-  }, [started, code, currentIndex, revealed]);
-
-  /** audio core helpers */
+  /** ---------- audio core ---------- */
   const loadCurrentIntoAudio = () => {
     if (!audioRef.current) return false;
-    if (!files[currentIndex]) return false;
-
+    if (!songItems[currentIndex]) return false;
     const url = fileUrls[currentIndex];
     audioRef.current.src = url;
     audioRef.current.currentTime = 0;
@@ -305,17 +244,15 @@ export default function HostPage() {
     } catch (e) {
       console.error(e);
       setIsPlaying(false);
-      alert("Browser blocked autoplay. Click PLAY/RESUME once, then Next will auto-play.");
+      alert("Browser blocked autoplay. Click PLAY/RESUME once, then Next/Prev will auto-play.");
     }
   };
 
-  // When index changes, load file; if Next/Prev requested autoplay, play it.
   useEffect(() => {
-    if (!files.length) return;
+    if (!songItems.length) return;
     const ok = loadCurrentIntoAudio();
     if (!ok) return;
 
-    // Autoplay only when Next/Prev set the flag
     if (shouldAutoplayNextRef.current) {
       shouldAutoplayNextRef.current = false;
       playAudio();
@@ -323,9 +260,65 @@ export default function HostPage() {
       setIsPlaying(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIndex, files.length]);
+  }, [currentIndex, songItems.length]);
 
-  /** controls */
+  const stopAudio = () => {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
+    audioRef.current.currentTime = 0;
+  };
+
+  /** ---------- game start (SYNCED ORDER) ---------- */
+  const handleStartGame = async () => {
+    if (!songItems.length) {
+      alert("Add songs first.");
+      return;
+    }
+
+    // ✅ Shuffle the entire list (file + title + artist together)
+    const shuffled = shuffleArray(songItems);
+
+    // This becomes the "official" game order for host AND TV
+    setSongItems(shuffled);
+    setCurrentIndex(0);
+    setRevealed(false);
+    setIsPlaying(false);
+    shouldAutoplayNextRef.current = false;
+
+    const newCode = randomCode4Letters();
+    setCode(newCode);
+    setStarted(true);
+
+    // ✅ Supabase songs list MUST match the shuffled order
+    const shuffledTitles = shuffled.map((s) => s.title);
+
+    const { error } = await upsertGame({
+      code: newCode,
+      songs: shuffledTitles,
+      current_index: 0,
+      revealed: false,
+      pattern,
+    });
+
+    if (error) {
+      console.error(error);
+      alert("Failed to save game to Supabase: " + error.message);
+    }
+  };
+
+  /** ---------- supabase sync ---------- */
+  useEffect(() => {
+    if (!started || !code) return;
+
+    const doUpdate = async () => {
+      const { error } = await updateGameState(code, currentIndex, revealed);
+      if (error) console.error("Supabase update error:", error.message);
+    };
+
+    doUpdate();
+  }, [started, code, currentIndex, revealed]);
+
+  /** ---------- controls ---------- */
   const handlePlayResume = async () => {
     if (!audioRef.current) return;
     if (!audioRef.current.src) loadCurrentIntoAudio();
@@ -338,29 +331,20 @@ export default function HostPage() {
     setIsPlaying(false);
   };
 
-  const stopAndResetAudio = () => {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    audioRef.current.currentTime = 0;
-  };
-
-  // ✅ NEXT/PREV should auto-play
   const handlePrev = () => {
     setRevealed(false);
-    stopAndResetAudio();
+    stopAudio();
     setIsPlaying(false);
-
     shouldAutoplayNextRef.current = true;
     setCurrentIndex((i) => Math.max(0, i - 1));
   };
 
   const handleNext = () => {
     setRevealed(false);
-    stopAndResetAudio();
+    stopAudio();
     setIsPlaying(false);
-
     shouldAutoplayNextRef.current = true;
-    setCurrentIndex((i) => Math.min(playLabels.length - 1, i + 1));
+    setCurrentIndex((i) => Math.min(songItems.length - 1, i + 1));
   };
 
   const handleRevealToggle = () => setRevealed((r) => !r);
@@ -373,6 +357,7 @@ export default function HostPage() {
     window.open(`/tv/${code}`, "_blank", "noopener,noreferrer");
   };
 
+  /** ---------- UI ---------- */
   return (
     <main
       className="min-h-screen w-full text-white font-['Press_Start_2P']"
@@ -407,10 +392,6 @@ export default function HostPage() {
                 ))}
               </select>
 
-              <div className="text-[10px] opacity-70 mt-3">
-                (Theme is just a label while you&apos;re loading songs manually.)
-              </div>
-
               <div className="text-lg mt-6 mb-4">Win Pattern</div>
               <select
                 className="w-full bg-black/70 border border-white/20 rounded-xl px-4 py-3 text-sm"
@@ -424,7 +405,6 @@ export default function HostPage() {
                 ))}
               </select>
 
-              {/* hidden file input */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -441,7 +421,23 @@ export default function HostPage() {
                 ADD SONGS
               </button>
 
-              <div className="text-xs opacity-80 mt-3">Loaded: {files.length} file(s)</div>
+              <div className="text-xs opacity-80 mt-3">
+                Loaded: {count} file(s)
+              </div>
+
+              {/* Quick sanity: show how the parser is reading artist */}
+              {count > 0 && (
+                <div className="mt-3 text-[10px] opacity-75">
+                  Example parse: <span className="text-cyan-200">{songItems[0]?.title}</span>
+                  {songItems[0]?.artist ? (
+                    <>
+                      {" "}— <span className="text-fuchsia-200">{songItems[0]?.artist}</span>
+                    </>
+                  ) : (
+                    <> (no artist found in filename)</>
+                  )}
+                </div>
+              )}
 
               <button
                 onClick={handleStartGame}
@@ -449,10 +445,6 @@ export default function HostPage() {
               >
                 START GAME
               </button>
-
-              <div className="text-[10px] opacity-80 mt-4">
-                Tip: Keep &quot;SHOW CODE&quot; off while you&apos;re getting ready.
-              </div>
             </div>
 
             {/* RIGHT: controls */}
@@ -481,12 +473,18 @@ export default function HostPage() {
                     {nowTitle}
                   </div>
 
-                  {!!nowArtist && (
-                    <div className="mt-4 text-sm md:text-base text-white/70 break-words">{nowArtist}</div>
+                  {nowArtist ? (
+                    <div className="mt-4 text-sm md:text-base text-white/70 break-words">
+                      {nowArtist}
+                    </div>
+                  ) : (
+                    <div className="mt-4 text-[10px] text-white/50">
+                      (No artist found — rename files like: Artist - Song.mp3)
+                    </div>
                   )}
 
                   <div className="mt-4 text-[10px] opacity-70">
-                    Track {files.length ? currentIndex + 1 : 0} / {files.length}
+                    Track {count ? currentIndex + 1 : 0} / {count}
                   </div>
                 </div>
               </div>
@@ -524,11 +522,6 @@ export default function HostPage() {
                 >
                   {revealed ? "HIDE ON TV" : "REVEAL ON TV"}
                 </button>
-              </div>
-
-              <div className="mt-4 text-[10px] opacity-75">
-                Theme: {selectedTheme} • Pattern:{" "}
-                {PATTERNS.find((p) => p.key === pattern)?.label ?? pattern}
               </div>
 
               <audio
